@@ -1,0 +1,44 @@
+[project]
+name = "doracxx"
+version = "0.1.0"
+description = "A cross-platform C++ build system for Dora dataflow nodes with automatic dependency resolution and modern project structure."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["uv", "rich"]
+authors = [
+    {name = "Groupe Carvi", email = "contact@groupe-carvi.com"}
+]
+keywords = ["dora", "dataflow", "cpp", "build-system", "robotics"]
+license = {text = "MIT"}
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.urls]
+Homepage = "https://github.com/groupe-carvi/doracxx"
+Repository = "https://github.com/groupe-carvi/doracxx.git"
+Issues = "https://github.com/groupe-carvi/doracxx/issues"
+
+[project.scripts]
+doracxx = "doracxx.cli:main"
+dora-cxx-build = "doracxx.cli:build_node"
+dora-cxx-prepare = "doracxx.cli:prepare_dora"
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["doracxx*"]
+
+[tool.setuptools.package-data]
+"doracxx" = ["*.py"]
+
+[tool.setuptools]
+include-package-data = true
