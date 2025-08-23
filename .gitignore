@@ -99,3 +99,6 @@ examples/*/target/
 # UV specific
 .python-version
 uv.lock
+
+# Folder used to store third-party deps
+**/third_party/**

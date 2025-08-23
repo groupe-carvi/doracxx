@@ -270,32 +270,45 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
         pass
 
     # add generated .cc sources to compile list
-    # For MSVC, if a matching Dora .lib exists for a crate, prefer linking that
+    # For both MSVC and GCC/Clang, if a matching Dora library exists for a crate, prefer linking that
     # library instead of compiling the generated .cc to avoid duplicate symbols.
-    if kind == "msvc":
-        filtered = []
-        lib_dir = Path(dora_target) / profile
-        # Fallback to release if debug doesn't exist (common with vendored Dora)
-        if not lib_dir.exists() and profile == "debug":
+    filtered = []
+    lib_dir = Path(dora_target) / profile
+    # Fallback to release if debug doesn't exist, or debug if release doesn't exist
+    if not lib_dir.exists():
+        if profile == "debug":
             lib_dir = Path(dora_target) / "release"
-        for p in generated_cc:
-            ppath = Path(p)
-            # crate name is parent of src (e.g., dora-node-api-cxx)
-            crate = ppath.parent.parent.name if ppath.parent.parent.name else None
-            lib_candidates = []
-            if crate:
-                lib_candidates.append(crate + ".lib")
-                lib_candidates.append(crate.replace('-', '_') + ".lib")
-            found_lib = False
-            for lc in lib_candidates:
-                if lib_dir.exists() and (lib_dir / lc).exists():
-                    found_lib = True
+        elif profile == "release":
+            lib_dir = Path(dora_target) / "debug"
+    
+    # Check which libraries actually exist
+    available_libs = set()
+    if lib_dir.exists():
+        for f in lib_dir.iterdir():
+            if f.is_file():
+                if kind == "msvc" and f.suffix.lower() == ".lib":
+                    available_libs.add(f.stem)
+                elif not kind == "msvc" and f.suffix.lower() == ".a" and f.name.startswith("lib"):
+                    available_libs.add(f.stem[3:])  # remove "lib" prefix
+    
+    # Only compile .cc files if their corresponding library doesn't exist
+    for p in generated_cc:
+        ppath = Path(p)
+        # crate name is parent of src (e.g., dora-node-api-cxx)
+        crate = ppath.parent.parent.name if ppath.parent.parent.name else None
+        should_compile = True
+        
+        if crate:
+            lib_candidates = [crate, crate.replace('-', '_')]
+            for candidate in lib_candidates:
+                if candidate in available_libs:
+                    should_compile = False
                     break
-            if not found_lib:
-                filtered.append(ppath)
-        srcs += filtered
-    else:
-        srcs += [Path(p) for p in generated_cc]
+        
+        if should_compile:
+            filtered.append(ppath)
+    
+    srcs += filtered
     # Build command differs between MSVC (cl) and gcc/clang (g++, clang++)
     if kind == "msvc":
         # cl compiles+links in one invocation. Use /std:c++17 and /EHsc for exceptions.
@@ -308,9 +321,12 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
         cmd += [str(s) for s in srcs]
         # Find any Dora library files under the Dora target dir to pass to linker
         lib_dir = Path(dora_target) / profile
-        # Fallback to release if debug doesn't exist (common with vendored Dora)
-        if not lib_dir.exists() and profile == "debug":
-            lib_dir = Path(dora_target) / "release"
+        # Fallback between debug and release profiles
+        if not lib_dir.exists():
+            if profile == "debug":
+                lib_dir = Path(dora_target) / "release"
+            elif profile == "release":
+                lib_dir = Path(dora_target) / "debug"
         libs = []
         if lib_dir.exists():
             for f in lib_dir.iterdir():
@@ -346,7 +362,15 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
             cmd += ["-I", inc]
         # link flags
         # search Dora libs in given dora_target/<profile> and dora_target/<profile>/deps
-        lib_dirs = [Path(dora_target) / profile, Path(dora_target) / profile / "deps"]
+        # Fallback between debug and release profiles
+        base_lib_dir = Path(dora_target) / profile
+        if not base_lib_dir.exists():
+            if profile == "debug":
+                base_lib_dir = Path(dora_target) / "release"
+            elif profile == "release":
+                base_lib_dir = Path(dora_target) / "debug"
+        
+        lib_dirs = [base_lib_dir, base_lib_dir / "deps"]
         linked = []
         for ld in lib_dirs:
             if not ld.exists():
@@ -356,13 +380,15 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
                 if not f.is_file():
                     continue
                 n = f.name
-                if n.startswith("lib") and ("dora" in n.lower() or "dora_node_api_cxx" in n.lower()):
+                # Only link the main API libraries, not all dependencies
+                if n == "libdora_node_api_cxx.a" or n == "libdora_node_api_c.a":
                     # libfoo.a -> -lfoo
                     base = n
                     if base.startswith("lib"):
                         base = base[3:]
                     base = base.split(".")[0]
-                    linked.append(base)
+                    if base not in linked:  # avoid duplicates
+                        linked.append(base)
         # add common flags
         if os.name == "nt":
             cmd += ["-lws2_32"]
