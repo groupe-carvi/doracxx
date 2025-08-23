@@ -11,7 +11,7 @@ After trying different ways to actually build the C and C++ nodes using the exam
 - **Modern project structure**: Organization with `include/`, `deps/`, `src/` and `build/`
 - **Dora resolution**: Compilation and linkage against Dora cxxbridge artifacts
 - **Cross-platform**: Windows support with MSVC/clang-cl
-- **Dependency management**: Automatic copying of Dora headers into `deps/`
+- **Dora dependency management**: Automatic copying of Dora headers into `deps/`
 
 ## Planned
 
