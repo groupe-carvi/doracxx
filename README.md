@@ -1,14 +1,23 @@
 # doracxx
 
-A modern build system for C++ nodes in the Dora framework.
+A simple build system for dora-rs C/C++ nodes. 
+
+## Why doracxx
+After trying different ways to actually build the C and C++ nodes using the examples from dora-rs, we found that there was not an ideal way to actually make it easy to build our C++ nodes. This is why we decided to create doracxx, it just work out of the box and can just be dropped inside a dataflow to build any C and C++ nodes.
 
 ## Features
 
 - **Automatic compilation**: Automatically detects and compiles `.c`, `.cpp` and `.cc` files
 - **Modern project structure**: Organization with `include/`, `deps/`, `src/` and `build/`
-- **Dora integration**: Compilation against Dora cxxbridge artifacts
+- **Dora resolution**: Compilation and linkage against Dora cxxbridge artifacts
 - **Cross-platform**: Windows support with MSVC/clang-cl
 - **Dependency management**: Automatic copying of Dora headers into `deps/`
+
+## Planned
+
+- **Dependancy managemement**: From a TOML file, we would be able to specify C++ dependencies and they would be resolved during build time. It would support git fetching for doracxx own toml package system, cmake, vcpkg and conan.
+- **Dora C/CXX node template**: Create new nodes with 'doracxx new'.
+- **Making it a dora-rs core feature**: We could look into rewriting it in Rust and make a PR to dora-rs so that it becomes part of the framework directly.
 
 ## Installation
 
@@ -69,7 +78,7 @@ doracxx build --node-dir simple-node --profile release --out simple-node
 ### Basic Build Command
 
 ```bash
-dora-cxx-build --node-dir <path-to-node> --profile <debug|release> --out <executable-name>
+doracxx build --node-dir <path-to-node> --profile <debug|release> --out <executable-name>
 ```
 
 ### Options
@@ -80,12 +89,12 @@ dora-cxx-build --node-dir <path-to-node> --profile <debug|release> --out <execut
 - `--dora-target`: Custom Dora target directory (optional)
 - `--skip-build-packages`: Skip building Dora packages (for pre-built environments)
 
-### Environment Preparation
+### Dora Preparation
 
-If you need to prepare the Dora environment:
+If you dont have the dora C++ bridge available, runing this will clone and prepare dora in your project. It can take some time to build at first and it will be installed in the third_party folder relative to where you runned the command.
 
 ```bash
-dora-cxx-prepare
+doracxx prepare --dora-git <git-url> --dora-rev <rev> --profile <debug or release>
 ```
 
 ## Project Structure
@@ -115,13 +124,13 @@ your-node/
 # dataflow.yml
 nodes:
   - id: sensor-node
-    build: dora-cxx-build --node-dir nodes/sensor --profile release --out sensor
+    build: doracxx build --node-dir nodes/sensor --profile release --out sensor
     path: target/release/sensor
     outputs:
       data: sensor/raw_data
 
   - id: processor-node  
-    build: dora-cxx-build --node-dir nodes/processor --profile release --out processor
+    build: doracxx build --node-dir nodes/processor --profile release --out processor
     path: target/release/processor
     inputs:
       raw: sensor-node/data
@@ -135,7 +144,7 @@ nodes:
 # In dataflow.yml
 nodes:
   - id: my-node
-    build: uv run dora-cxx-build --node-dir nodes/my-node --profile release --out my-node
+    build: uv run doracxx build --node-dir nodes/my-node --profile release --out my-node
     path: target/release/my-node
 ```
 
@@ -159,17 +168,17 @@ The builder automatically detects available compilers and chooses the best optio
 
 ```bash
 export CXX=/path/to/custom/compiler
-dora-cxx-build --node-dir my-node --profile release --out my-node
+doracxx build --node-dir my-node --profile release --out my-node
 ```
 
 ### Development vs Production
 
 ```bash
 # Development build with debug symbols
-dora-cxx-build --node-dir my-node --profile debug --out my-node-debug
+doracxx build --node-dir my-node --profile debug --out my-node-debug
 
 # Production build with optimizations
-dora-cxx-build --node-dir my-node --profile release --out my-node
+doracxx build --node-dir my-node --profile release --out my-node
 ```
 
 ## Contributing
