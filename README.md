@@ -43,7 +43,7 @@ pip install -e .
    my-node/
    ├── include/          # Your project headers (.h/.hpp)
    ├── src/             # Your source files (.cc/.cpp/.c)
-   └── build/           # Build artifacts (auto-created)
+   └── deps/            # dependancies .h (auto-created)
    ```
 
 3. **Build your node**:
