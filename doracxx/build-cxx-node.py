@@ -11,6 +11,35 @@ import tempfile
 import argparse
 
 
+def get_doracxx_cache_dir():
+    """Get the global doracxx cache directory (~/.doracxx)."""
+    home = Path.home()
+    cache_dir = home / ".doracxx"
+    cache_dir.mkdir(exist_ok=True)
+    return cache_dir
+
+
+def get_dora_cache_path():
+    """Get the path for cached Dora installation."""
+    return get_doracxx_cache_dir() / "dora"
+
+
+def find_dora_target_dir():
+    """Find Dora target directory, checking cache first, then local."""
+    # Check global cache first
+    cache_target = get_dora_cache_path() / "target"
+    if cache_target.exists():
+        return str(cache_target)
+    
+    # Fallback to local third_party (backward compatibility)
+    local_target = Path.cwd() / "third_party" / "dora" / "target"
+    if local_target.exists():
+        return str(local_target)
+    
+    # Last resort: current workspace target
+    return str(Path.cwd() / "target")
+
+
 def git_clone(url, dest, rev=None):
     dest = Path(dest)
     if dest.exists():
@@ -195,23 +224,30 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
     if not include_dirs and not generated_cc:
         raise RuntimeError("no cxxbridge outputs found under Dora target; build Dora or set DORA_TARGET_DIR")
 
-    # If Dora is vendored under third_party/dora, some generated headers expect
+    # If Dora is vendored under third_party/dora or cached in ~/.doracxx/dora, some generated headers expect
     # companion headers from the examples (for instance operator.h). Add any
     # example dirs containing operator.h to the include path so these headers
     # can be resolved without copying files.
     try:
-        vendor_dora = Path.cwd() / "third_party" / "dora"
-        if vendor_dora.exists():
-            # include any example operator.h parent dirs
-            for p in vendor_dora.rglob("operator.h"):
-                inc = str(p.parent)
-                if inc not in include_dirs:
-                    include_dirs.append(inc)
-            # also add the C API apis path so includes like "operator/operator_api.h" resolve
-            apis_c = vendor_dora / "apis" / "c"
-            if apis_c.exists():
-                if str(apis_c) not in include_dirs:
-                    include_dirs.append(str(apis_c))
+        # Check both cache and local locations
+        dora_locations = [
+            get_dora_cache_path(),
+            Path.cwd() / "third_party" / "dora"
+        ]
+        
+        for vendor_dora in dora_locations:
+            if vendor_dora.exists():
+                # include any example operator.h parent dirs
+                for p in vendor_dora.rglob("operator.h"):
+                    inc = str(p.parent)
+                    if inc not in include_dirs:
+                        include_dirs.append(inc)
+                # also add the C API apis path so includes like "operator/operator_api.h" resolve
+                apis_c = vendor_dora / "apis" / "c"
+                if apis_c.exists():
+                    if str(apis_c) not in include_dirs:
+                        include_dirs.append(str(apis_c))
+                break  # Use first available location
     except Exception:
         # non-fatal; continue with discovered include dirs
         pass
@@ -437,7 +473,9 @@ def ensure_clang_installed(install: bool = False):
     # Configure download URL via env to allow offline mirrors; default is a GitHub release for LLVM
     # default to a recent LLVM Windows release; can be overridden with CLANG_DOWNLOAD_URL
     default_url = os.environ.get("CLANG_DOWNLOAD_URL", "https://github.com/llvm/llvm-project/releases/download/llvmorg-20.1.8/clang+llvm-20.1.8-x86_64-pc-windows-msvc.tar.xz")
-    target_root = Path("third_party") / "llvm"
+    
+    # Use global cache for LLVM installation
+    target_root = get_doracxx_cache_dir() / "llvm"
     target_root.mkdir(parents=True, exist_ok=True)
     zip_name = default_url.split("/")[-1]
     dest_zip = target_root / zip_name
@@ -577,21 +615,34 @@ def main():
             print("detected C++ sources in node; enabling --skip-build-packages to avoid cargo builds")
         args.skip_build_packages = True
 
-    # Prefer an explicit argument, then env, then a vendored third_party/dora/target if present,
+    # Prefer an explicit argument, then env, then cached dora, then local dora,
     # otherwise fall back to the current workspace target dir.
     dora_target = args.dora_target or os.environ.get("DORA_TARGET_DIR")
     if not dora_target:
-        vendored = Path.cwd() / "third_party" / "dora" / "target"
-        if vendored.exists():
-            dora_target = str(vendored)
-        else:
-            dora_target = str(Path.cwd() / "target")
+        dora_target = find_dora_target_dir()
+        print(f"Using Dora target directory: {dora_target}")
 
     # If requested, fetch Dora and build required packages
     if args.fetch_dora:
-        vendor = Path("third_party") / "dora"
-        print(f"Fetching Dora into {vendor} from {args.dora_git}...")
+        # Use global cache for fetched Dora
+        vendor = get_dora_cache_path()
+        print(f"Fetching Dora into global cache {vendor} from {args.dora_git}...")
         repo = git_clone(args.dora_git, vendor, args.dora_rev)
+        
+        # Create symlink for backward compatibility
+        local_vendor = Path("third_party") / "dora"
+        local_vendor.parent.mkdir(exist_ok=True)
+        if not local_vendor.exists():
+            try:
+                if os.name == "nt":
+                    subprocess.run(["cmd", "/c", "mklink", "/J", str(local_vendor), str(vendor)], 
+                                 check=True, capture_output=True)
+                else:
+                    local_vendor.symlink_to(vendor, target_is_directory=True)
+                print(f"Created symlink: {local_vendor} -> {vendor}")
+            except (subprocess.CalledProcessError, OSError):
+                print("Warning: could not create symlink, using cache directly")
+        
         # build the entire Dora workspace to ensure cxxbridge outputs are generated
         cargo_cmd = [os.environ.get("CARGO", "cargo"), "build", "--workspace"]
         if args.profile == "release":

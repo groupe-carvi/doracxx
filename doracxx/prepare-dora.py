@@ -2,19 +2,33 @@
 """Prepare Dora checkout and build only the C++ APIs needed by C++ nodes.
 
 This script will:
-- clone or update Dora into third_party/dora
+- clone or update Dora into global cache directory (~/.doracxx/dora)
 - by default: build only the essential C++ API packages (optimized, faster)
 - if --full-workspace: build the entire workspace (slower but complete)
 - if package builds fail, attempt to build only the C/C++ API manifests
 
 The goal is to resolve Dora (sources + cxxbridge artifacts) before node builds
 while minimizing compilation time by only building what's needed for C++ nodes.
+Uses a global cache to share dependencies between projects.
 """
 
 import argparse
 import subprocess
 from pathlib import Path
 import os
+
+
+def get_doracxx_cache_dir():
+    """Get the global doracxx cache directory (~/.doracxx)."""
+    home = Path.home()
+    cache_dir = home / ".doracxx"
+    cache_dir.mkdir(exist_ok=True)
+    return cache_dir
+
+
+def get_dora_cache_path():
+    """Get the path for cached Dora installation."""
+    return get_doracxx_cache_dir() / "dora"
 
 
 def git_clone_or_update(url: str, dest: Path, rev: str | None):
@@ -101,10 +115,36 @@ def main():
     p.add_argument("--profile", choices=("debug", "release"), default="debug")
     p.add_argument("--full-workspace", action="store_true", 
                    help="Build the entire dora workspace instead of only C++ APIs (slower but more complete)")
+    p.add_argument("--use-local", action="store_true",
+                   help="Use local third_party/dora instead of global cache (legacy mode)")
     args = p.parse_args()
 
-    vendor = Path("third_party") / "dora"
-    print("Prepare Dora in:", vendor)
+    if args.use_local:
+        # Legacy mode: use third_party/dora in current project
+        vendor = Path("third_party") / "dora"
+        print("Prepare Dora in (local mode):", vendor)
+    else:
+        # New mode: use global cache
+        vendor = get_dora_cache_path()
+        print("Prepare Dora in (global cache):", vendor)
+        
+        # Create symlink from third_party/dora to cache for backward compatibility
+        local_vendor = Path("third_party") / "dora"
+        local_vendor.parent.mkdir(exist_ok=True)
+        
+        if not local_vendor.exists():
+            try:
+                if os.name == "nt":
+                    # Windows: use junction (works without admin privileges)
+                    subprocess.run(["cmd", "/c", "mklink", "/J", str(local_vendor), str(vendor)], 
+                                 check=True, capture_output=True)
+                else:
+                    # Unix: use symlink
+                    local_vendor.symlink_to(vendor, target_is_directory=True)
+                print(f"Created symlink: {local_vendor} -> {vendor}")
+            except (subprocess.CalledProcessError, OSError) as e:
+                print(f"Warning: could not create symlink ({e}), tools will look in cache directly")
+
     repo = git_clone_or_update(args.dora_git, vendor, args.dora_rev)
 
     if args.full_workspace:

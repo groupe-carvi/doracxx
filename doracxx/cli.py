@@ -13,7 +13,68 @@ This script will:
 """
 import subprocess
 import sys
+import shutil
 from pathlib import Path
+
+
+def get_doracxx_cache_dir():
+    """Get the global doracxx cache directory (~/.doracxx)."""
+    home = Path.home()
+    cache_dir = home / ".doracxx"
+    cache_dir.mkdir(exist_ok=True)
+    return cache_dir
+
+
+def cache_info():
+    """Show information about the doracxx cache"""
+    cache_dir = get_doracxx_cache_dir()
+    print(f"doracxx cache directory: {cache_dir}")
+    
+    # Check cache contents
+    if cache_dir.exists():
+        print("\nCache contents:")
+        for item in cache_dir.iterdir():
+            if item.is_dir():
+                try:
+                    size = sum(f.stat().st_size for f in item.rglob('*') if f.is_file())
+                    size_mb = size / (1024 * 1024)
+                    print(f"  {item.name}/  ({size_mb:.1f} MB)")
+                except Exception:
+                    print(f"  {item.name}/  (size unknown)")
+            else:
+                try:
+                    size_mb = item.stat().st_size / (1024 * 1024)
+                    print(f"  {item.name}  ({size_mb:.1f} MB)")
+                except Exception:
+                    print(f"  {item.name}  (size unknown)")
+    else:
+        print("Cache directory does not exist yet.")
+
+
+def cache_clean():
+    """Clean the doracxx cache"""
+    cache_dir = get_doracxx_cache_dir()
+    if cache_dir.exists():
+        try:
+            shutil.rmtree(cache_dir)
+            print(f"Cache cleared: {cache_dir}")
+        except Exception as e:
+            print(f"Error clearing cache: {e}")
+    else:
+        print("Cache directory does not exist.")
+
+
+def cache_clean_dora():
+    """Clean only Dora from the cache"""
+    dora_cache = get_doracxx_cache_dir() / "dora"
+    if dora_cache.exists():
+        try:
+            shutil.rmtree(dora_cache)
+            print(f"Dora cache cleared: {dora_cache}")
+        except Exception as e:
+            print(f"Error clearing Dora cache: {e}")
+    else:
+        print("Dora cache does not exist.")
 
 
 def _run_script(name: str, args=None):
@@ -59,6 +120,22 @@ def main():
         # Remove 'prepare' from args and call prepare_dora
         sys.argv = [sys.argv[0]] + sys.argv[2:]
         prepare_dora()
+    elif subcommand == "cache":
+        # Handle cache subcommands
+        if len(sys.argv) < 3:
+            print("Cache subcommands: info, clean, clean-dora")
+            return
+            
+        cache_subcommand = sys.argv[2]
+        if cache_subcommand == "info":
+            cache_info()
+        elif cache_subcommand == "clean":
+            cache_clean()
+        elif cache_subcommand == "clean-dora":
+            cache_clean_dora()
+        else:
+            print(f"Unknown cache subcommand: {cache_subcommand}")
+            print("Available: info, clean, clean-dora")
     elif subcommand in ["help", "-h", "--help"]:
         print_help()
     else:
@@ -75,18 +152,27 @@ doracxx - A cross-platform C++ build system for Dora dataflow nodes
 Usage: doracxx <command> [options]
 
 Commands:
-  build, b     Build a C++ Dora node
-  prepare, p   Prepare Dora environment and dependencies
-  help         Show this help message
+  build, b       Build a C++ Dora node
+  prepare, p     Prepare Dora environment and dependencies
+  cache          Manage global cache (~/.doracxx)
+    info         Show cache information
+    clean        Clear entire cache
+    clean-dora   Clear only Dora from cache
+  help           Show this help message
 
 Examples:
   doracxx build --node-dir nodes/my-node --profile release --out my-node
   doracxx prepare --profile release
+  doracxx cache info
+  doracxx cache clean-dora
   doracxx help
 
 For detailed options for each command, use:
   doracxx build --help
   doracxx prepare --help
+
+Note: doracxx now uses a global cache (~/.doracxx) to share dependencies
+between projects. Use --use-local flag with prepare to use project-local mode.
 """
     print(help_text)
 
