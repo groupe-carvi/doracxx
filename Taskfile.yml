@@ -12,6 +12,15 @@ tasks:
     dir: "./examples"
     cmds:
       - uv run doracxx build --node-dir simple-node --profile release --out simple-node
+  example:prepare-dora-full:
+    dir: "./examples"
+    deps:
+      - example:create-venv
+    desc: "Setup Dora for the example (full workspace build - slower but complete)"
+    cmds:
+      - uv run doracxx prepare --full-workspace
+    status:
+      - test -d third_party/dora
   example:create-venv:
     desc: "Create virtual environment with uv"
     dir: "./examples"
@@ -24,7 +33,7 @@ tasks:
     dir: "./examples"
     deps:
       - example:create-venv
-    desc: "Setup Dora for the example"
+    desc: "Setup Dora for the example (optimized - only C++ APIs)"
     cmds:
       - uv run doracxx prepare
     status:
