@@ -15,66 +15,7 @@ import subprocess
 import sys
 import shutil
 from pathlib import Path
-
-
-def get_doracxx_cache_dir():
-    """Get the global doracxx cache directory (~/.doracxx)."""
-    home = Path.home()
-    cache_dir = home / ".doracxx"
-    cache_dir.mkdir(exist_ok=True)
-    return cache_dir
-
-
-def cache_info():
-    """Show information about the doracxx cache"""
-    cache_dir = get_doracxx_cache_dir()
-    print(f"doracxx cache directory: {cache_dir}")
-    
-    # Check cache contents
-    if cache_dir.exists():
-        print("\nCache contents:")
-        for item in cache_dir.iterdir():
-            if item.is_dir():
-                try:
-                    size = sum(f.stat().st_size for f in item.rglob('*') if f.is_file())
-                    size_mb = size / (1024 * 1024)
-                    print(f"  {item.name}/  ({size_mb:.1f} MB)")
-                except Exception:
-                    print(f"  {item.name}/  (size unknown)")
-            else:
-                try:
-                    size_mb = item.stat().st_size / (1024 * 1024)
-                    print(f"  {item.name}  ({size_mb:.1f} MB)")
-                except Exception:
-                    print(f"  {item.name}  (size unknown)")
-    else:
-        print("Cache directory does not exist yet.")
-
-
-def cache_clean():
-    """Clean the doracxx cache"""
-    cache_dir = get_doracxx_cache_dir()
-    if cache_dir.exists():
-        try:
-            shutil.rmtree(cache_dir)
-            print(f"Cache cleared: {cache_dir}")
-        except Exception as e:
-            print(f"Error clearing cache: {e}")
-    else:
-        print("Cache directory does not exist.")
-
-
-def cache_clean_dora():
-    """Clean only Dora from the cache"""
-    dora_cache = get_doracxx_cache_dir() / "dora"
-    if dora_cache.exists():
-        try:
-            shutil.rmtree(dora_cache)
-            print(f"Dora cache cleared: {dora_cache}")
-        except Exception as e:
-            print(f"Error clearing Dora cache: {e}")
-    else:
-        print("Dora cache does not exist.")
+from .cache import get_doracxx_cache_dir, cache_info, cache_clean, cache_clean_dora
 
 
 def _run_script(name: str, args=None):
@@ -96,7 +37,13 @@ def _run_script(name: str, args=None):
 
 def build_node():
     """Build a C++ Dora node with automatic dependency resolution"""
-    _run_script("build-cxx-node.py", list(sys.argv[1:]))
+    # Transform positional argument to --node-dir
+    args = list(sys.argv[1:])
+    if args and not args[0].startswith('-'):
+        # First non-option argument is the node directory
+        node_dir = args.pop(0)
+        args = ["--node-dir", node_dir] + args
+    _run_script("build-cxx-node.py", args)
 
 
 def prepare_dora():

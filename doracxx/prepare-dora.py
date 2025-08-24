@@ -17,18 +17,14 @@ import subprocess
 from pathlib import Path
 import os
 
-
-def get_doracxx_cache_dir():
-    """Get the global doracxx cache directory (~/.doracxx)."""
-    home = Path.home()
-    cache_dir = home / ".doracxx"
-    cache_dir.mkdir(exist_ok=True)
-    return cache_dir
-
-
-def get_dora_cache_path():
-    """Get the path for cached Dora installation."""
-    return get_doracxx_cache_dir() / "dora"
+# Import cache functions with proper path handling for different execution contexts
+try:
+    from .cache import get_doracxx_cache_dir, get_dora_cache_path
+except ImportError:
+    # When run directly, import from the same directory
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from cache import get_doracxx_cache_dir, get_dora_cache_path
 
 
 def git_clone_or_update(url: str, dest: Path, rev: str | None):
@@ -126,8 +122,8 @@ def main():
         vendor = Path("third_party") / "dora"
         print("Prepare Dora in (local mode):", vendor)
     else:
-        # New mode: use global cache
-        vendor = get_dora_cache_path()
+        # New mode: use global cache with version-specific directories
+        vendor = get_dora_cache_path(args.dora_git, args.dora_rev)
         print("Prepare Dora in (global cache):", vendor)
         
         # Optionally create symlink from third_party/dora to cache for backward compatibility

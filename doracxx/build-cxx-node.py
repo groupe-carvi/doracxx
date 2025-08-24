@@ -10,26 +10,28 @@ from pathlib import Path
 import tempfile
 import argparse
 
-
-def get_doracxx_cache_dir():
-    """Get the global doracxx cache directory (~/.doracxx)."""
-    home = Path.home()
-    cache_dir = home / ".doracxx"
-    cache_dir.mkdir(exist_ok=True)
-    return cache_dir
-
-
-def get_dora_cache_path():
-    """Get the path for cached Dora installation."""
-    return get_doracxx_cache_dir() / "dora"
+# Import cache functions with proper path handling for different execution contexts
+try:
+    from .cache import get_doracxx_cache_dir, get_dora_cache_path
+except ImportError:
+    # When run directly, import from the same directory
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from cache import get_doracxx_cache_dir, get_dora_cache_path
 
 
-def find_dora_target_dir():
+def find_dora_target_dir(dora_git: str | None = None, dora_rev: str | None = None):
     """Find Dora target directory, checking cache first, then local."""
-    # Check global cache first
-    cache_target = get_dora_cache_path() / "target"
+    # Check global cache first (version-specific)
+    cache_target = get_dora_cache_path(dora_git, dora_rev) / "target"
     if cache_target.exists():
         return str(cache_target)
+    
+    # Fallback: try the default latest cache if specific version not found
+    if dora_git or dora_rev:
+        default_cache_target = get_dora_cache_path() / "target"
+        if default_cache_target.exists():
+            return str(default_cache_target)
     
     # Fallback to local third_party (backward compatibility)
     local_target = Path.cwd() / "third_party" / "dora" / "target"
@@ -139,7 +141,7 @@ def find_cxxbridge_artifacts(dora_target: Path, profile: str):
     return include_dirs, generated_cc
 
 
-def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, dora_target: str, extras: list):
+def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, dora_target: str, extras: list, dora_git: str | None = None, dora_rev: str | None = None):
     # Clean build directory to avoid conflicts with previous builds or parallel builds
     if build_dir.exists():
         for item in build_dir.iterdir():
@@ -231,7 +233,7 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
     try:
         # Check both cache and local locations
         dora_locations = [
-            get_dora_cache_path(),
+            get_dora_cache_path(dora_git, dora_rev),
             Path.cwd() / "third_party" / "dora"
         ]
         
@@ -619,13 +621,13 @@ def main():
     # otherwise fall back to the current workspace target dir.
     dora_target = args.dora_target or os.environ.get("DORA_TARGET_DIR")
     if not dora_target:
-        dora_target = find_dora_target_dir()
+        dora_target = find_dora_target_dir(args.dora_git, args.dora_rev)
         print(f"Using Dora target directory: {dora_target}")
 
     # If requested, fetch Dora and build required packages
     if args.fetch_dora:
         # Use global cache for fetched Dora
-        vendor = get_dora_cache_path()
+        vendor = get_dora_cache_path(args.dora_git, args.dora_rev)
         print(f"Fetching Dora into global cache {vendor} from {args.dora_git}...")
         repo = git_clone(args.dora_git, vendor, args.dora_rev)
         
@@ -665,7 +667,7 @@ def main():
         ensure_clang_installed(install=True)
 
     try:
-        out = compile_node(node_dir, build_dir, args.out, profile, dora_target, extras=["-l", "dora_node_api_cxx"])
+        out = compile_node(node_dir, build_dir, args.out, profile, dora_target, extras=["-l", "dora_node_api_cxx"], dora_git=args.dora_git, dora_rev=args.dora_rev)
         print("built:", out)
     except Exception as e:
         print(f"compilation failed: {e}")

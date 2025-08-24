@@ -6,7 +6,6 @@ tasks:
     - task: example:build-simple-node
   example:build-simple-node:
     deps:
-      - example:create-venv
       - example:prepare-dora
     desc: "Build and run the 'simple-node' example using doracxx"
     dir: "./examples"
