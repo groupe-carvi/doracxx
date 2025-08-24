@@ -1,0 +1,31 @@
+version: '3'
+
+tasks:
+  default:
+    cmds:
+    - task: example:build-simple-node
+  example:build-simple-node:
+    deps:
+      - example:create-venv
+      - example:prepare-dora
+    desc: "Build and run the 'simple-node' example using doracxx"
+    dir: "./examples"
+    cmds:
+      - uv run doracxx build --node-dir simple-node --profile release --out simple-node
+  example:create-venv:
+    desc: "Create virtual environment with uv"
+    dir: "./examples"
+    cmds:
+      - uv venv
+      - uv pip install ../
+    status:
+      - test -d .venv
+  example:prepare-dora:
+    dir: "./examples"
+    deps:
+      - example:create-venv
+    desc: "Setup Dora for the example"
+    cmds:
+      - uv run doracxx prepare
+    status:
+      - test -d third_party/dora
