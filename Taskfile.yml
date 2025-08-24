@@ -19,14 +19,13 @@ tasks:
     desc: "Setup Dora for the example (full workspace build - slower but complete)"
     cmds:
       - uv run doracxx prepare --full-workspace
-    status:
-      - test -d third_party/dora
+
   example:create-venv:
     desc: "Create virtual environment with uv"
     dir: "./examples"
     cmds:
       - uv venv
-      - uv pip install ../
+      - uv pip install -e ../
     status:
       - test -d .venv
   example:prepare-dora:
@@ -36,5 +35,3 @@ tasks:
     desc: "Setup Dora for the example (optimized - only C++ APIs)"
     cmds:
       - uv run doracxx prepare
-    status:
-      - test -d third_party/dora

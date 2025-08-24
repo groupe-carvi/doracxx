@@ -629,20 +629,6 @@ def main():
         print(f"Fetching Dora into global cache {vendor} from {args.dora_git}...")
         repo = git_clone(args.dora_git, vendor, args.dora_rev)
         
-        # Create symlink for backward compatibility
-        local_vendor = Path("third_party") / "dora"
-        local_vendor.parent.mkdir(exist_ok=True)
-        if not local_vendor.exists():
-            try:
-                if os.name == "nt":
-                    subprocess.run(["cmd", "/c", "mklink", "/J", str(local_vendor), str(vendor)], 
-                                 check=True, capture_output=True)
-                else:
-                    local_vendor.symlink_to(vendor, target_is_directory=True)
-                print(f"Created symlink: {local_vendor} -> {vendor}")
-            except (subprocess.CalledProcessError, OSError):
-                print("Warning: could not create symlink, using cache directly")
-        
         # build the entire Dora workspace to ensure cxxbridge outputs are generated
         cargo_cmd = [os.environ.get("CARGO", "cargo"), "build", "--workspace"]
         if args.profile == "release":

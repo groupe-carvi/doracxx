@@ -117,6 +117,8 @@ def main():
                    help="Build the entire dora workspace instead of only C++ APIs (slower but more complete)")
     p.add_argument("--use-local", action="store_true",
                    help="Use local third_party/dora instead of global cache (legacy mode)")
+    p.add_argument("--create-symlink", action="store_true",
+                   help="Create symlink from third_party/dora to global cache for backward compatibility")
     args = p.parse_args()
 
     if args.use_local:
@@ -128,22 +130,23 @@ def main():
         vendor = get_dora_cache_path()
         print("Prepare Dora in (global cache):", vendor)
         
-        # Create symlink from third_party/dora to cache for backward compatibility
-        local_vendor = Path("third_party") / "dora"
-        local_vendor.parent.mkdir(exist_ok=True)
-        
-        if not local_vendor.exists():
-            try:
-                if os.name == "nt":
-                    # Windows: use junction (works without admin privileges)
-                    subprocess.run(["cmd", "/c", "mklink", "/J", str(local_vendor), str(vendor)], 
-                                 check=True, capture_output=True)
-                else:
-                    # Unix: use symlink
-                    local_vendor.symlink_to(vendor, target_is_directory=True)
-                print(f"Created symlink: {local_vendor} -> {vendor}")
-            except (subprocess.CalledProcessError, OSError) as e:
-                print(f"Warning: could not create symlink ({e}), tools will look in cache directly")
+        # Optionally create symlink from third_party/dora to cache for backward compatibility
+        if args.create_symlink:
+            local_vendor = Path("third_party") / "dora"
+            local_vendor.parent.mkdir(exist_ok=True)
+            
+            if not local_vendor.exists():
+                try:
+                    if os.name == "nt":
+                        # Windows: use junction (works without admin privileges)
+                        subprocess.run(["cmd", "/c", "mklink", "/J", str(local_vendor), str(vendor)], 
+                                     check=True, capture_output=True)
+                    else:
+                        # Unix: use symlink
+                        local_vendor.symlink_to(vendor, target_is_directory=True)
+                    print(f"Created symlink: {local_vendor} -> {vendor}")
+                except (subprocess.CalledProcessError, OSError) as e:
+                    print(f"Warning: could not create symlink ({e})")
 
     repo = git_clone_or_update(args.dora_git, vendor, args.dora_rev)
 
