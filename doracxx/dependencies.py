@@ -40,13 +40,13 @@ class DependencyManager:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         
         # Initialize dependency cache and build information
-        self.resolved_deps: Dict[str, Path] = {}
+        self.resolved_deps: Dict[str, Dict[str, Path]] = {}  # Store both source and install paths
         self.include_dirs: List[str] = []
         self.lib_dirs: List[str] = []
         self.libraries: List[str] = []
     
-    def resolve_all_dependencies(self) -> Dict[str, Path]:
-        """Resolve all dependencies and return mapping of name to installation path"""
+    def resolve_all_dependencies(self) -> Dict[str, Dict[str, Path]]:
+        """Resolve all dependencies and return mapping of name to {source, install} paths"""
         print("🔍 Resolving dependencies...")
         
         for dep_name, dep_config in self.config.dependencies.items():
@@ -54,17 +54,20 @@ class DependencyManager:
             
             try:
                 if isinstance(dep_config, GitDependency):
-                    install_path = self._resolve_git_dependency(dep_name, dep_config)
+                    source_dir, install_path = self._resolve_git_dependency(dep_name, dep_config)
                 elif isinstance(dep_config, VcpkgDependency):
-                    install_path = self._resolve_vcpkg_dependency(dep_name, dep_config)
+                    source_dir, install_path = self._resolve_vcpkg_dependency(dep_name, dep_config)
                 elif isinstance(dep_config, SystemDependency):
-                    install_path = self._resolve_system_dependency(dep_name, dep_config)
+                    source_dir, install_path = self._resolve_system_dependency(dep_name, dep_config)
                 elif isinstance(dep_config, LocalDependency):
-                    install_path = self._resolve_local_dependency(dep_name, dep_config)
+                    source_dir, install_path = self._resolve_local_dependency(dep_name, dep_config)
                 else:
                     raise ValueError(f"Unknown dependency type for {dep_name}")
                 
-                self.resolved_deps[dep_name] = install_path
+                self.resolved_deps[dep_name] = {
+                    'source': source_dir,
+                    'install': install_path
+                }
                 print(f"✅ Resolved {dep_name}: {install_path}")
                 
             except Exception as e:
@@ -76,8 +79,8 @@ class DependencyManager:
         
         return self.resolved_deps
     
-    def _resolve_git_dependency(self, name: str, dep: GitDependency) -> Path:
-        """Resolve a git-based dependency"""
+    def _resolve_git_dependency(self, name: str, dep: GitDependency) -> Tuple[Path, Path]:
+        """Resolve a git-based dependency, returns (source_dir, install_dir)"""
         # Create cache key based on URL and revision
         cache_key = self._create_cache_key(dep.url, dep.rev or dep.branch or dep.tag or "main")
         cache_path = self.cache_dir / "git" / cache_key
@@ -116,10 +119,10 @@ class DependencyManager:
                 # Header-only library, just create symlinks to include directories
                 self._setup_header_only_lib(source_dir, install_dir, dep.include_dirs)
         
-        return install_dir
+        return source_dir, install_dir
     
-    def _resolve_vcpkg_dependency(self, name: str, dep: VcpkgDependency) -> Path:
-        """Resolve a vcpkg-based dependency"""
+    def _resolve_vcpkg_dependency(self, name: str, dep: VcpkgDependency) -> Tuple[Path, Path]:
+        """Resolve a vcpkg-based dependency, returns (source_dir, install_dir)"""
         vcpkg_exe = self._find_vcpkg()
         if not vcpkg_exe:
             raise RuntimeError("vcpkg not found. Please install vcpkg and add it to PATH.")
@@ -148,10 +151,12 @@ class DependencyManager:
         
         # Return vcpkg installation path
         vcpkg_root = Path(vcpkg_exe).parent.parent
-        return vcpkg_root / "installed" / triplet
+        install_path = vcpkg_root / "installed" / triplet
+        # For vcpkg, source and install are the same
+        return install_path, install_path
     
-    def _resolve_system_dependency(self, name: str, dep: SystemDependency) -> Path:
-        """Resolve a system dependency"""
+    def _resolve_system_dependency(self, name: str, dep: SystemDependency) -> Tuple[Path, Path]:
+        """Resolve a system dependency, returns (source_dir, install_dir)"""
         # Try pkg-config first if specified
         if dep.pkg_config:
             try:
@@ -161,7 +166,8 @@ class DependencyManager:
                 )
                 print(f"  ✅ Found system package via pkg-config: {dep.pkg_config}")
                 # Return a dummy path - actual paths will be resolved via pkg-config
-                return Path("/usr")  # Placeholder for system dependencies
+                system_path = Path("/usr")  # Placeholder for system dependencies
+                return system_path, system_path
             except (subprocess.CalledProcessError, FileNotFoundError):
                 print(f"  ⚠️  pkg-config not found or package {dep.pkg_config} not available")
         
@@ -173,13 +179,14 @@ class DependencyManager:
         
         if len(found_libs) == len(dep.libraries):
             print(f"  ✅ Found all system libraries: {found_libs}")
-            return Path("/usr")  # Placeholder for system dependencies
+            system_path = Path("/usr")  # Placeholder for system dependencies
+            return system_path, system_path
         else:
             missing = set(dep.libraries) - set(found_libs)
             raise RuntimeError(f"System dependency {name}: missing libraries {missing}")
     
-    def _resolve_local_dependency(self, name: str, dep: LocalDependency) -> Path:
-        """Resolve a local dependency"""
+    def _resolve_local_dependency(self, name: str, dep: LocalDependency) -> Tuple[Path, Path]:
+        """Resolve a local dependency, returns (source_dir, install_dir)"""
         source_path = Path(dep.path).resolve()
         if not source_path.exists():
             raise FileNotFoundError(f"Local dependency path not found: {source_path}")
@@ -197,7 +204,7 @@ class DependencyManager:
                 install_dir.mkdir(parents=True, exist_ok=True)
                 self._setup_header_only_lib(source_path, install_dir, dep.include_dirs)
         
-        return install_dir
+        return source_path, install_dir
     
     def _build_dependency(self, source_dir: Path, install_dir: Path, 
                          build_system: BuildSystem, cmake_options: Dict[str, str]):
@@ -294,13 +301,16 @@ class DependencyManager:
     def _collect_dependency_info(self):
         """Collect include directories, library directories, and libraries from resolved dependencies"""
         for dep_name, dep_config in self.config.dependencies.items():
-            install_path = self.resolved_deps.get(dep_name)
-            if not install_path:
+            dep_paths = self.resolved_deps.get(dep_name)
+            if not dep_paths:
                 continue
+            
+            source_path = dep_paths['source']
+            install_path = dep_paths['install']
             
             # Add standard paths
             if isinstance(dep_config, (GitDependency, LocalDependency)):
-                # Standard include and lib directories
+                # Standard include and lib directories from install path
                 for subdir in ["include", "inc"]:
                     inc_path = install_path / subdir
                     if inc_path.exists():
@@ -311,9 +321,9 @@ class DependencyManager:
                     if lib_path.exists():
                         self.lib_dirs.append(str(lib_path))
                 
-                # Add explicitly configured paths
+                # Add explicitly configured paths relative to SOURCE directory (this fixes the issue!)
                 for inc_dir in dep_config.include_dirs:
-                    self.include_dirs.append(str(install_path / inc_dir))
+                    self.include_dirs.append(str(source_path / inc_dir))
                 
                 for lib_dir in dep_config.lib_dirs:
                     self.lib_dirs.append(str(install_path / lib_dir))
