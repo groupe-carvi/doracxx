@@ -194,13 +194,13 @@ Examples:
     
     try:
         created_path = create_example_config(output_path)
-        print(f"✅ Created configuration file: {created_path}")
-        print("\n📋 Next steps:")
+        print(f"[OK] Created configuration file: {created_path}")
+        print("\n[INFO] Next steps:")
         print("1. Edit the configuration file to match your project")
         print("2. Add your dependencies to the [dependencies] section")
         print("3. Build your node with: doracxx build --node-dir .")
     except Exception as e:
-        print(f"❌ Error creating configuration file: {e}")
+        print(f"[ERROR] Error creating configuration file: {e}")
 
 
 def print_help():

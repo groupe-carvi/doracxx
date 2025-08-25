@@ -47,10 +47,10 @@ class DependencyManager:
     
     def resolve_all_dependencies(self) -> Dict[str, Dict[str, Path]]:
         """Resolve all dependencies and return mapping of name to {source, install} paths"""
-        print("🔍 Resolving dependencies...")
+        print("[INFO] Resolving dependencies...")
         
         for dep_name, dep_config in self.config.dependencies.items():
-            print(f"📦 Processing dependency: {dep_name}")
+            print(f"[DEPS] Processing dependency: {dep_name}")
             
             try:
                 if isinstance(dep_config, GitDependency):
@@ -68,10 +68,10 @@ class DependencyManager:
                     'source': source_dir,
                     'install': install_path
                 }
-                print(f"✅ Resolved {dep_name}: {install_path}")
+                print(f"[OK] Resolved {dep_name}: {install_path}")
                 
             except Exception as e:
-                print(f"❌ Failed to resolve {dep_name}: {e}")
+                print(f"[ERROR] Failed to resolve {dep_name}: {e}")
                 raise
         
         # Collect all include dirs, lib dirs, and libraries
@@ -87,10 +87,10 @@ class DependencyManager:
         
         # Clone or update repository
         if not cache_path.exists():
-            print(f"  🔄 Cloning {dep.url}...")
+            print(f"  [GIT] Cloning {dep.url}...")
             self._git_clone(dep.url, cache_path, dep.rev or dep.branch or dep.tag)
         else:
-            print(f"  📁 Using cached repository: {cache_path}")
+            print(f"  [CACHE] Using cached repository: {cache_path}")
         
         # Determine source directory (handle subdir)
         source_dir = cache_path / dep.subdir if dep.subdir else cache_path
@@ -100,7 +100,7 @@ class DependencyManager:
         try:
             install_dir.mkdir(parents=True, exist_ok=True)
         except Exception as e:
-            print(f"  ⚠️  Failed to create install directory: {e}")
+            print(f"  [WARN] Failed to create install directory: {e}")
             # Use alternative path if default fails
             install_dir = cache_path / "inst"
             install_dir.mkdir(parents=True, exist_ok=True)
@@ -111,8 +111,8 @@ class DependencyManager:
                 try:
                     self._build_dependency(source_dir, install_dir, dep.build_system, dep.cmake_options)
                 except Exception as e:
-                    print(f"  ⚠️  Build failed: {e}")
-                    print(f"  📦 Treating as header-only library...")
+                    print(f"  [WARN] Build failed: {e}")
+                    print(f"  [FALLBACK] Treating as header-only library...")
                     # Fallback to header-only for libraries like Eigen
                     self._setup_header_only_lib(source_dir, install_dir, dep.include_dirs or ["Eigen"])
             else:
@@ -135,7 +135,7 @@ class DependencyManager:
         if dep.version:
             # vcpkg doesn't directly support version constraints in install command
             # This would require a vcpkg.json manifest for proper version control
-            print(f"  ⚠️  Version constraint {dep.version} noted but vcpkg install doesn't directly support it")
+            print(f"  [WARN] Version constraint {dep.version} noted but vcpkg install doesn't directly support it")
         
         if dep.features:
             for feature in dep.features:
@@ -143,7 +143,7 @@ class DependencyManager:
         
         cmd.extend(["--triplet", triplet])
         
-        print(f"  🔄 Installing with vcpkg: {' '.join(cmd)}")
+        print(f"  [VCPKG] Installing with vcpkg: {' '.join(cmd)}")
         try:
             subprocess.run(cmd, check=True, capture_output=True, text=True)
         except subprocess.CalledProcessError as e:
@@ -164,12 +164,12 @@ class DependencyManager:
                     ["pkg-config", "--exists", dep.pkg_config],
                     check=True, capture_output=True
                 )
-                print(f"  ✅ Found system package via pkg-config: {dep.pkg_config}")
+                print(f"  [OK] Found system package via pkg-config: {dep.pkg_config}")
                 # Return a dummy path - actual paths will be resolved via pkg-config
                 system_path = Path("/usr")  # Placeholder for system dependencies
                 return system_path, system_path
             except (subprocess.CalledProcessError, FileNotFoundError):
-                print(f"  ⚠️  pkg-config not found or package {dep.pkg_config} not available")
+                print(f"  [WARN] pkg-config not found or package {dep.pkg_config} not available")
         
         # Check if libraries are available in standard locations
         found_libs = []
@@ -178,7 +178,7 @@ class DependencyManager:
                 found_libs.append(lib)
         
         if len(found_libs) == len(dep.libraries):
-            print(f"  ✅ Found all system libraries: {found_libs}")
+            print(f"  [OK] Found all system libraries: {found_libs}")
             system_path = Path("/usr")  # Placeholder for system dependencies
             return system_path, system_path
         else:
@@ -502,7 +502,7 @@ if __name__ == "__main__":
         config = load_config()
         dep_manager = setup_dependencies(config, Path.cwd())
         
-        print("\n📋 Dependency Resolution Summary:")
+        print("\n[SUMMARY] Dependency Resolution Summary:")
         print(f"  Resolved dependencies: {len(dep_manager.resolved_deps)}")
         print(f"  Include directories: {len(dep_manager.include_dirs)}")
         print(f"  Library directories: {len(dep_manager.lib_dirs)}")

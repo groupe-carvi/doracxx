@@ -63,7 +63,7 @@ def ensure_dora_prepared(dora_git: str | None = None, dora_rev: str | None = Non
     has_cxxbridge = any(p.exists() and any(p.iterdir()) for p in cxxbridge_indicators if p.exists())
     
     if not has_cxxbridge:
-        print("🔄 Dora not found or incomplete. Preparing Dora automatically...")
+        print("[INFO] Dora not found or incomplete. Preparing Dora automatically...")
         
         # Import prepare_dora functionality
         try:
@@ -76,7 +76,7 @@ def ensure_dora_prepared(dora_git: str | None = None, dora_rev: str | None = Non
         
         # Determine the repository path
         vendor = get_dora_cache_path(dora_git, dora_rev)
-        print(f"📁 Preparing Dora in global cache: {vendor}")
+        print(f"[CACHE] Preparing Dora in global cache: {vendor}")
         
         # Clone or update Dora repository
         dora_git_url = dora_git or "https://github.com/dora-rs/dora"
@@ -90,7 +90,7 @@ def ensure_dora_prepared(dora_git: str | None = None, dora_rev: str | None = Non
             print("🔧 Attempting targeted builds for C/C++ API crates...")
             build_manifests(repo, profile)
         
-        print("✅ Dora preparation completed")
+        print("[OK] Dora preparation completed")
         
         # Re-check the target directory
         new_target = find_dora_target_dir(dora_git, dora_rev)
@@ -209,12 +209,12 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
             final_dora_rev = config.node.dora_rev
     
     # Ensure Dora is prepared with the requested version
-    print("🔍 Checking Dora preparation...")
+    print("[INFO] Checking Dora preparation...")
     try:
         dora_target = ensure_dora_prepared(final_dora_git, final_dora_rev, profile)
-        print(f"✅ Dora target ready: {dora_target}")
+        print(f"[OK] Dora target ready: {dora_target}")
     except Exception as e:
-        print(f"❌ Failed to prepare Dora automatically: {e}")
+        print(f"[ERROR] Failed to prepare Dora automatically: {e}")
         print(f"Using fallback Dora target directory: {dora_target}")
     
     # On Windows, try to load MSVC environment (vcvarsall) so cl/link are visible
@@ -520,7 +520,7 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
                     msvc_flags.append(flag)  # Already MSVC format
                 # Skip other incompatible flags
                 elif flag.startswith("-"):
-                    print(f"⚠️  Skipping incompatible flag for MSVC: {flag}")
+                    print(f"[WARN] Skipping incompatible flag for MSVC: {flag}")
                 else:
                     msvc_flags.append(flag)
             cmd.extend(msvc_flags)
@@ -865,20 +865,20 @@ def main():
         current_dir = Path.cwd()
         if (current_dir / "doracxx.toml").exists():
             node_dir = current_dir
-            print(f"📁 Auto-detected node directory: {node_dir}")
+            print(f"[AUTO] Auto-detected node directory: {node_dir}")
         else:
             # Try to find project root and check if it's a node directory
             try:
                 project_root = find_project_root(current_dir)
                 if (project_root / "doracxx.toml").exists():
                     node_dir = project_root
-                    print(f"📁 Auto-detected node directory at project root: {node_dir}")
+                    print(f"[AUTO] Auto-detected node directory at project root: {node_dir}")
                 else:
-                    print("❌ Error: No doracxx.toml found in current directory or project root.")
+                    print("[ERROR] Error: No doracxx.toml found in current directory or project root.")
                     print("   Please specify --node-dir or run from a directory containing doracxx.toml")
                     sys.exit(1)
             except Exception:
-                print("❌ Error: No doracxx.toml found in current directory.")
+                print("[ERROR] Error: No doracxx.toml found in current directory.")
                 print("   Please specify --node-dir or run from a directory containing doracxx.toml")
                 sys.exit(1)
     else:
@@ -903,10 +903,10 @@ def main():
                 for config_path in config_candidates:
                     if config_path.exists():
                         config = load_config(config_path)
-                        print(f"📋 Loaded configuration: {config_path}")
+                        print(f"[CONFIG] Loaded configuration: {config_path}")
                         break
         except Exception as e:
-            print(f"⚠️  Warning: Failed to load configuration: {e}")
+            print(f"[WARN] Warning: Failed to load configuration: {e}")
             print("Continuing with command-line arguments only...")
     
     # Determine settings (command-line overrides config)
@@ -924,10 +924,10 @@ def main():
         install_clang = args.install_clang
 
     print(f"🔧 Building node: {out_name}")
-    print(f"📁 Node directory: {node_dir}")
-    print(f"🏗️  Build profile: {profile}")
+    print(f"[NODE] Node directory: {node_dir}")
+    print(f"[BUILD] Build profile: {profile}")
     if config:
-        print(f"📦 Dependencies: {len(config.dependencies)}")
+        print(f"[DEPS] Dependencies: {len(config.dependencies)}")
 
     # If the node appears to be a native C++ node (contains .cc sources), we
     # should not attempt to cargo-build Dora Rust packages by default because
@@ -948,7 +948,7 @@ def main():
                 dora_target = ensure_dora_prepared(dora_git, dora_rev, profile)
                 print(f"Using Dora target directory: {dora_target}")
             except Exception as e:
-                print(f"❌ Failed to prepare Dora automatically: {e}")
+                print(f"[ERROR] Failed to prepare Dora automatically: {e}")
                 # Fallback to manual target detection
                 dora_target = find_dora_target_dir(dora_git, dora_rev)
                 print(f"Using fallback Dora target directory: {dora_target}")

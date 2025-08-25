@@ -76,7 +76,7 @@ def build_workspace(repo: Path, profile: str):
             print(f"✓ Successfully built package: {package}")
             success_count += 1
         except subprocess.CalledProcessError:
-            print(f"⚠ Warning: failed to build package {package} (continuing...)")
+            print(f"[WARN] Warning: failed to build package {package} (continuing...)")
     
     if success_count > 0:
         print(f"Successfully built {success_count}/{len(essential_packages)} essential packages")
