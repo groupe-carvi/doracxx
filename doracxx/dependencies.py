@@ -209,7 +209,7 @@ class DependencyManager:
     def _build_dependency(self, source_dir: Path, install_dir: Path, 
                          build_system: BuildSystem, cmake_options: Dict[str, str]):
         """Build a dependency using the specified build system"""
-        print(f"  🔨 Building with {build_system.value}...")
+        print(f"  [BUILD] Building with {build_system.value}...")
         
         if build_system == BuildSystem.CMAKE:
             self._build_with_cmake(source_dir, install_dir, cmake_options)
@@ -238,7 +238,7 @@ class DependencyManager:
         
         cmake_args.append(str(source_dir))
         
-        print(f"    💻 Configure: {' '.join(cmake_args)}")
+        print(f"    [CMAKE] Configure: {' '.join(cmake_args)}")
         subprocess.run(cmake_args, cwd=build_dir, check=True)
         
         # Build
@@ -246,12 +246,12 @@ class DependencyManager:
         if self.config.build.parallel_jobs:
             build_args.extend(["--parallel", str(self.config.build.parallel_jobs)])
         
-        print(f"    💻 Build: {' '.join(build_args)}")
+        print(f"    [CMAKE] Build: {' '.join(build_args)}")
         subprocess.run(build_args, cwd=build_dir, check=True)
         
         # Install
         install_args = ["cmake", "--install", "."]
-        print(f"    💻 Install: {' '.join(install_args)}")
+        print(f"    [CMAKE] Install: {' '.join(install_args)}")
         subprocess.run(install_args, cwd=build_dir, check=True)
     
     def _build_with_make(self, source_dir: Path, install_dir: Path):

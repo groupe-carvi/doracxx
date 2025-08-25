@@ -83,11 +83,11 @@ def ensure_dora_prepared(dora_git: str | None = None, dora_rev: str | None = Non
         repo = git_clone_or_update(dora_git_url, vendor, dora_rev)
         
         # Build essential C++ API packages
-        print("🔨 Building essential C++ API packages...")
+        print("[BUILD] Building essential C++ API packages...")
         ok = build_workspace(repo, profile)
         
         if not ok:
-            print("🔧 Attempting targeted builds for C/C++ API crates...")
+            print("[BUILD] Attempting targeted builds for C/C++ API crates...")
             build_manifests(repo, profile)
         
         print("[OK] Dora preparation completed")
@@ -312,7 +312,7 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
                     break
             if should_exclude:
                 excluded_srcs.append(src)
-                print(f"🚫 Excluding source file: {relative_path}")
+                print(f"[EXCLUDE] Excluding source file: {relative_path}")
         
         # Remove excluded files
         for excluded in excluded_srcs:
@@ -338,7 +338,7 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
     # Setup dependencies if config is provided
     dep_manager = None
     if config and config.dependencies:
-        print("🔧 Setting up dependencies...")
+        print("[DEPS] Setting up dependencies...")
         dep_manager = setup_dependencies(config, node_dir, workspace_target_dir)
     
     # Clean target build directory to avoid conflicts with previous builds or parallel builds

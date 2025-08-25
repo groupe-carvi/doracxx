@@ -73,7 +73,7 @@ def build_workspace(repo: Path, profile: str):
             cmd.append("--release")
         try:
             run(cmd, cwd=repo)
-            print(f"✓ Successfully built package: {package}")
+            print(f"[OK] Successfully built package: {package}")
             success_count += 1
         except subprocess.CalledProcessError:
             print(f"[WARN] Warning: failed to build package {package} (continuing...)")
