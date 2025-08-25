@@ -1,17 +1,10 @@
-#include "dora-node-api.h"
-#include <iostream>
-#include <chrono>
-#include <thread>
-
-// Include Eigen3 for matrix operations
 #include <Eigen/Dense>
+#include <iostream>
 
 int main() {
-    std::cout << "Starting simple Dora C++ node with Eigen3..." << std::endl;
+    std::cout << "Testing Eigen3..." << std::endl;
     
-    // Demonstrate Eigen3 usage
-    std::cout << "Creating a 3x3 matrix with Eigen3:" << std::endl;
-    
+    // Create a 3x3 matrix
     Eigen::Matrix3d matrix;
     matrix << 1, 2, 3,
               4, 5, 6,
@@ -31,12 +24,6 @@ int main() {
     Eigen::Vector3d result = matrix * vector;
     std::cout << "Matrix * Vector: " << result.transpose() << std::endl;
     
-    // Simulate some work
-    for (int i = 0; i < 5; ++i) {
-        std::cout << "Processing iteration " << (i + 1) << "/5" << std::endl;
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    }
-    
-    std::cout << "Simple node with Eigen3 completed successfully!" << std::endl;
+    std::cout << "Eigen3 test completed successfully!" << std::endl;
     return 0;
 }

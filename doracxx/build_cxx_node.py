@@ -13,11 +13,15 @@ import argparse
 # Import cache functions with proper path handling for different execution contexts
 try:
     from .cache import get_doracxx_cache_dir, get_dora_cache_path
+    from .config import load_config, DoracxxConfig, Toolchain, find_project_root
+    from .dependencies import setup_dependencies
 except ImportError:
     # When run directly, import from the same directory
     import sys
     sys.path.insert(0, str(Path(__file__).parent))
     from cache import get_doracxx_cache_dir, get_dora_cache_path
+    from config import load_config, DoracxxConfig, Toolchain, find_project_root
+    from dependencies import setup_dependencies
 
 
 def find_dora_target_dir(dora_git: str | None = None, dora_rev: str | None = None):
@@ -34,12 +38,65 @@ def find_dora_target_dir(dora_git: str | None = None, dora_rev: str | None = Non
             return str(default_cache_target)
     
     # Fallback to local third_party (backward compatibility)
-    local_target = Path.cwd() / "third_party" / "dora" / "target"
+    project_root = find_project_root()
+    local_target = project_root / "third_party" / "dora" / "target"
     if local_target.exists():
         return str(local_target)
     
     # Last resort: current workspace target
-    return str(Path.cwd() / "target")
+    return str(project_root / "target")
+
+
+def ensure_dora_prepared(dora_git: str | None = None, dora_rev: str | None = None, profile: str = "debug"):
+    """Ensure Dora is prepared and built. If not found, automatically prepare it."""
+    import sys
+    
+    # Check if Dora target directory exists with cxxbridge artifacts
+    dora_target_path = Path(find_dora_target_dir(dora_git, dora_rev))
+    
+    # Check for cxxbridge artifacts that indicate a successful Dora build
+    cxxbridge_indicators = [
+        dora_target_path / profile / "cxxbridge",
+        dora_target_path / "cxxbridge"
+    ]
+    
+    has_cxxbridge = any(p.exists() and any(p.iterdir()) for p in cxxbridge_indicators if p.exists())
+    
+    if not has_cxxbridge:
+        print("🔄 Dora not found or incomplete. Preparing Dora automatically...")
+        
+        # Import prepare_dora functionality
+        try:
+            from .prepare_dora import git_clone_or_update, build_workspace, build_manifests
+            from .cache import get_dora_cache_path
+        except ImportError:
+            sys.path.insert(0, str(Path(__file__).parent))
+            from prepare_dora import git_clone_or_update, build_workspace, build_manifests
+            from cache import get_dora_cache_path
+        
+        # Determine the repository path
+        vendor = get_dora_cache_path(dora_git, dora_rev)
+        print(f"📁 Preparing Dora in global cache: {vendor}")
+        
+        # Clone or update Dora repository
+        dora_git_url = dora_git or "https://github.com/dora-rs/dora"
+        repo = git_clone_or_update(dora_git_url, vendor, dora_rev)
+        
+        # Build essential C++ API packages
+        print("🔨 Building essential C++ API packages...")
+        ok = build_workspace(repo, profile)
+        
+        if not ok:
+            print("🔧 Attempting targeted builds for C/C++ API crates...")
+            build_manifests(repo, profile)
+        
+        print("✅ Dora preparation completed")
+        
+        # Re-check the target directory
+        new_target = find_dora_target_dir(dora_git, dora_rev)
+        return new_target
+    
+    return str(dora_target_path)
 
 
 def git_clone(url, dest, rev=None):
@@ -141,17 +198,24 @@ def find_cxxbridge_artifacts(dora_target: Path, profile: str):
     return include_dirs, generated_cc
 
 
-def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, dora_target: str, extras: list, dora_git: str | None = None, dora_rev: str | None = None):
-    # Clean build directory to avoid conflicts with previous builds or parallel builds
-    if build_dir.exists():
-        for item in build_dir.iterdir():
-            if item.is_file() and (item.suffix in ['.obj', '.o', '.exe', '.pdb', '.ilk']):
-                try:
-                    item.unlink()
-                    print(f"cleaned: {item}")
-                except (OSError, PermissionError):
-                    # file might be in use, continue anyway
-                    pass
+def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, dora_target: str, extras: list, config: DoracxxConfig | None = None, dora_git: str | None = None, dora_rev: str | None = None):
+    # Extract Dora configuration from config if available
+    final_dora_git = dora_git
+    final_dora_rev = dora_rev
+    if config and config.node:
+        if config.node.dora_git:
+            final_dora_git = config.node.dora_git
+        if config.node.dora_rev:
+            final_dora_rev = config.node.dora_rev
+    
+    # Ensure Dora is prepared with the requested version
+    print("🔍 Checking Dora preparation...")
+    try:
+        dora_target = ensure_dora_prepared(final_dora_git, final_dora_rev, profile)
+        print(f"✅ Dora target ready: {dora_target}")
+    except Exception as e:
+        print(f"❌ Failed to prepare Dora automatically: {e}")
+        print(f"Using fallback Dora target directory: {dora_target}")
     
     # On Windows, try to load MSVC environment (vcvarsall) so cl/link are visible
     if os.name == "nt":
@@ -161,8 +225,12 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
             # if it fails, we continue and rely on PATH / CXX
             pass
 
-    # Find a C++ compiler (prefer environment, then common names). Use shutil.which to avoid
-    # raising FileNotFoundError from subprocess when candidate not present.
+    # Determine compiler preference from config
+    preferred_toolchain = None
+    if config:
+        preferred_toolchain = config.build.toolchain
+
+    # Find a C++ compiler (prefer environment, then config preference, then common names)
     cc_env = os.environ.get("CXX") or os.environ.get("CXX_COMPILER")
     cc = None
     kind = None
@@ -172,25 +240,31 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
         if cc_env.lower().endswith("cl.exe") or cc_env.lower().endswith("cl"):
             kind = "msvc"
     else:
-        # On Windows prefer MSVC (cl), then clang-cl, clang++, g++
-        if os.name == "nt":
-            for cand, k in [("cl", "msvc"), ("clang-cl", "msvc"), ("clang++", "gcc"), ("g++", "gcc")]:
-                p = shutil.which(cand)
-                if p:
-                    cc = p
-                    kind = k
-                    break
-        else:
-            for cand in ("clang++", "g++"):
-                p = shutil.which(cand)
-                if p:
-                    cc = p
-                    kind = "gcc"
-                    break
+        # Apply toolchain preference from config
+        candidates = []
+        if preferred_toolchain == Toolchain.MSVC or (preferred_toolchain == Toolchain.AUTO and os.name == "nt"):
+            candidates = [("cl", "msvc"), ("clang-cl", "msvc"), ("clang++", "gcc"), ("g++", "gcc")]
+        elif preferred_toolchain == Toolchain.CLANG:
+            candidates = [("clang++", "gcc"), ("clang-cl", "msvc"), ("g++", "gcc"), ("cl", "msvc")]
+        elif preferred_toolchain == Toolchain.GCC:
+            candidates = [("g++", "gcc"), ("clang++", "gcc"), ("clang-cl", "msvc"), ("cl", "msvc")]
+        else:  # AUTO or fallback
+            if os.name == "nt":
+                candidates = [("cl", "msvc"), ("clang-cl", "msvc"), ("clang++", "gcc"), ("g++", "gcc")]
+            else:
+                candidates = [("clang++", "gcc"), ("g++", "gcc")]
+        
+        for cand, k in candidates:
+            p = shutil.which(cand)
+            if p:
+                cc = p
+                kind = k
+                break
 
     if not cc:
         # If no compiler found on Windows, try to install clang automatically
-        if os.name == "nt":
+        auto_install = config.build.install_clang if config else False
+        if os.name == "nt" and auto_install:
             print("No C++ compiler found; attempting to install clang automatically...")
             if ensure_clang_installed(install=True):
                 # retry compiler detection after installation
@@ -212,14 +286,41 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
     if not srcs:
         raise RuntimeError("no C/C++ sources found in node dir (looked for .cc, .cpp, .c files)")
     
-    # Use target/<profile>/ for final executable (like Rust projects)
-    # Use the workspace target directory, not the Dora target directory
-    workspace_target_dir = Path.cwd() / "target" / profile
+    # Use target/<profile>/ for ALL build artifacts (like Rust projects)
+    # Use the project root directory, not the current working directory
+    project_root = find_project_root(node_dir)
+    workspace_target_dir = project_root / "target" / profile
     workspace_target_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Create subdirectories in target for organization
+    target_build_dir = workspace_target_dir / "build"
+    target_deps_dir = workspace_target_dir / "deps" 
+    target_include_dir = workspace_target_dir / "include"
+    target_build_dir.mkdir(exist_ok=True)
+    target_deps_dir.mkdir(exist_ok=True)
+    target_include_dir.mkdir(exist_ok=True)
+    
+    # Setup dependencies if config is provided
+    dep_manager = None
+    if config and config.dependencies:
+        print("🔧 Setting up dependencies...")
+        dep_manager = setup_dependencies(config, node_dir, workspace_target_dir)
+    
+    # Clean target build directory to avoid conflicts with previous builds or parallel builds
+    for item in target_build_dir.iterdir():
+        if item.is_file() and (item.suffix in ['.obj', '.o', '.exe', '.pdb', '.ilk']):
+            try:
+                item.unlink()
+                print(f"cleaned: {item}")
+            except (OSError, PermissionError):
+                # file might be in use, continue anyway
+                pass
+    
+    # Final executable path
     final_out_path = workspace_target_dir / (out_name + (".exe" if os.name == "nt" else ""))
     
-    # Build in the build_dir first, then copy to target
-    temp_out_path = build_dir / (out_name + (".exe" if os.name == "nt" else ""))
+    # All artifacts go directly to target (no build_dir copy step)
+    temp_out_path = final_out_path
 
     # discover cxxbridge include dirs and generated .cc files (do not copy)
     include_dirs, generated_cc = find_cxxbridge_artifacts(Path(dora_target), profile)
@@ -234,7 +335,7 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
         # Check both cache and local locations
         dora_locations = [
             get_dora_cache_path(dora_git, dora_rev),
-            Path.cwd() / "third_party" / "dora"
+            project_root / "third_party" / "dora"
         ]
         
         for vendor_dora in dora_locations:
@@ -258,28 +359,35 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
     print("cxxbridge include dirs:", include_dirs)
     print("cxxbridge generated .cc:", generated_cc)
 
-    # Set up proper C++ project structure:
-    # - include/ for project headers (.h/.hpp)
-    # - deps/ for generated/dependency headers
-    # - build/ for temporary compilation artifacts
-    
-    # Create structured directories
-    include_dir = node_dir / "include"
-    deps_dir = node_dir / "deps"
-    include_dir.mkdir(exist_ok=True)
-    deps_dir.mkdir(exist_ok=True)
+    # Set up proper C++ project structure in target directory:
+    # - target/{profile}/include/ for project headers (.h/.hpp)
+    # - target/{profile}/deps/ for generated/dependency headers  
+    # - target/{profile}/build/ for temporary compilation artifacts
     
     # Add project include directory to include path (highest priority)
-    project_include = str(include_dir)
+    project_include = str(target_include_dir)
     if project_include not in include_dirs:
         include_dirs.insert(0, project_include)
     
     # Add deps directory for generated/dependency headers
-    deps_include = str(deps_dir)
+    deps_include = str(target_deps_dir)
     if deps_include not in include_dirs:
         include_dirs.insert(1, deps_include)
     
-    # Copy convenience headers to deps/ directory instead of build/
+    # Copy project headers to target/include if they exist
+    project_include_src = node_dir / "include"
+    if project_include_src.exists():
+        for header in project_include_src.glob("**/*.h"):
+            rel_path = header.relative_to(project_include_src)
+            dest = target_include_dir / rel_path
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                shutil.copyfile(header, dest)
+                print(f"copied project header: {header} -> {dest}")
+            except Exception:
+                pass
+    
+    # Copy convenience headers to target/deps/ directory
     # These are generated/dependency headers from cxxbridge
     try:
         # search for any lib.rs.h under the discovered cxxbridge root(s)
@@ -297,7 +405,7 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
                     if out_name.endswith("-c"):
                         out_name = out_name[: -len("-c")]
                     out_name = out_name + ".h"
-                    dest = deps_dir / out_name
+                    dest = target_deps_dir / out_name
                     try:
                         shutil.copyfile(src_h, dest)
                         print(f"copied dependency header: {src_h} -> {dest}")
@@ -352,11 +460,57 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
         # cl compiles+links in one invocation. Use /std:c++17 and /EHsc for exceptions.
         # Ensure runtime library matches Dora's build: always use /MD to match release libs
         runtime_flag = "/MD"
-        cmd = [cc, "/nologo", "/EHsc", "/std:c++17", runtime_flag]
-        # add include dirs for MSVC
+        cmd = [cc, "/nologo", "/EHsc", runtime_flag]
+        
+        # Add C++ standard from config
+        std_flag = f"/std:{config.build.std}" if config else "/std:c++17"
+        cmd.append(std_flag)
+        
+        # Add custom compiler flags from config, converting GCC/Clang flags to MSVC equivalents
+        if config:
+            msvc_flags = []
+            for flag in config.build.cxxflags:
+                # Convert common GCC/Clang flags to MSVC equivalents
+                if flag == "-Wall":
+                    msvc_flags.append("/W3")  # MSVC equivalent of -Wall
+                elif flag == "-Wextra":
+                    msvc_flags.append("/W4")  # MSVC equivalent of -Wextra
+                elif flag == "-O2":
+                    msvc_flags.append("/O2")  # Optimization level 2
+                elif flag == "-O3":
+                    msvc_flags.append("/Ox")  # Maximum optimization
+                elif flag.startswith("-D"):
+                    msvc_flags.append(f"/D{flag[2:]}")  # Convert -DFOO to /DFOO
+                elif flag.startswith("/"):
+                    msvc_flags.append(flag)  # Already MSVC format
+                # Skip other incompatible flags
+                elif flag.startswith("-"):
+                    print(f"⚠️  Skipping incompatible flag for MSVC: {flag}")
+                else:
+                    msvc_flags.append(flag)
+            cmd.extend(msvc_flags)
+        
+        # add include dirs for MSVC (Dora includes first)
         for inc in include_dirs:
             cmd += ["/I", inc]
+        
+        # Add dependency include directories
+        if dep_manager:
+            dep_include_flags, _, _ = dep_manager.get_compiler_flags()
+            for flag in dep_include_flags:
+                cmd += ["/I", flag[2:]]  # Remove -I prefix for MSVC
+        
+        # Add custom include directories from config
+        if config:
+            for inc_dir in config.build.include_dirs:
+                abs_inc = node_dir / inc_dir if not Path(inc_dir).is_absolute() else Path(inc_dir)
+                cmd += ["/I", str(abs_inc)]
+        
+        # Set object file output directory to target/build
+        cmd.append(f"/Fo{target_build_dir}\\")
+        
         cmd += [str(s) for s in srcs]
+        
         # Find any Dora library files under the Dora target dir to pass to linker
         lib_dir = Path(dora_target) / profile
         # Fallback between debug and release profiles
@@ -380,13 +534,39 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
         # fallback to generic lib name if none found
         if not libs:
             libs = ["dora_node_api_cxx.lib"]
+        
+        # Add dependency libraries
+        if dep_manager:
+            libs.extend(dep_manager.libraries)
+        
+        # Add custom libraries from config
+        if config:
+            libs.extend(config.build.libraries)
+        
         # always link winsock and some common Windows system libs
         libs.append("ws2_32.lib")
         for syslib in ("userenv.lib", "bcrypt.lib", "ole32.lib", "oleaut32.lib", "advapi32.lib", "ntdll.lib", "shell32.lib"):
             if syslib not in libs:
                 libs.append(syslib)
+        
         # /LINK and /OUT
         cmd += ["/link", "/LIBPATH:" + str(lib_dir)]
+        
+        # Add dependency library directories
+        if dep_manager:
+            for lib_dir_path in dep_manager.lib_dirs:
+                cmd += ["/LIBPATH:" + lib_dir_path]
+        
+        # Add custom library directories from config
+        if config:
+            for lib_dir_path in config.build.lib_dirs:
+                abs_lib = node_dir / lib_dir_path if not Path(lib_dir_path).is_absolute() else Path(lib_dir_path)
+                cmd += ["/LIBPATH:" + str(abs_lib)]
+        
+        # Add custom linker flags from config
+        if config:
+            cmd.extend(config.build.ldflags)
+        
         cmd += libs
         cmd += ["/OUT:" + str(temp_out_path)]
         run(cmd, cwd=node_dir)
@@ -394,10 +574,30 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
         # assume gcc/clang compatible
         cmd = [cc]
         cmd += [str(s) for s in srcs]
-        cmd += ["-std=c++17"]
-        # include dirs
+        
+        # Add C++ standard from config
+        std_flag = f"-std={config.build.std}" if config else "-std=c++17"
+        cmd.append(std_flag)
+        
+        # Add custom compiler flags from config
+        if config:
+            cmd.extend(config.build.cxxflags)
+        
+        # include dirs (Dora includes first)
         for inc in include_dirs:
             cmd += ["-I", inc]
+        
+        # Add dependency include directories
+        if dep_manager:
+            dep_include_flags, _, _ = dep_manager.get_compiler_flags()
+            cmd.extend(dep_include_flags)
+        
+        # Add custom include directories from config
+        if config:
+            for inc_dir in config.build.include_dirs:
+                abs_inc = node_dir / inc_dir if not Path(inc_dir).is_absolute() else Path(inc_dir)
+                cmd += ["-I", str(abs_inc)]
+        
         # link flags
         # search Dora libs in given dora_target/<profile> and dora_target/<profile>/deps
         # Fallback between debug and release profiles
@@ -427,32 +627,52 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
                     base = base.split(".")[0]
                     if base not in linked:  # avoid duplicates
                         linked.append(base)
+        
+        # Add dependency library directories and libraries
+        if dep_manager:
+            _, dep_lib_dir_flags, dep_lib_flags = dep_manager.get_compiler_flags()
+            cmd.extend(dep_lib_dir_flags)
+        
+        # Add custom library directories from config
+        if config:
+            for lib_dir_path in config.build.lib_dirs:
+                abs_lib = node_dir / lib_dir_path if not Path(lib_dir_path).is_absolute() else Path(lib_dir_path)
+                cmd += ["-L", str(abs_lib)]
+        
         # add common flags
         if os.name == "nt":
             cmd += ["-lws2_32"]
         else:
             cmd += ["-pthread"]
+        
         # add -l for discovered libs
         for ln in linked:
             cmd += ["-l", ln]
+        
+        # Add dependency libraries
+        if dep_manager:
+            _, _, dep_lib_flags = dep_manager.get_compiler_flags()
+            cmd.extend(dep_lib_flags)
+        
+        # Add custom libraries from config
+        if config:
+            for lib in config.build.libraries:
+                cmd += ["-l", lib]
+        
+        # Add custom linker flags from config
+        if config:
+            cmd.extend(config.build.ldflags)
+        
         cmd += extras
         cmd += ["-o", str(temp_out_path)]
         run(cmd, cwd=node_dir)
     
-    # Copy the executable to target/<profile>/ directory (like Rust projects)
-    if temp_out_path.exists():
-        try:
-            if final_out_path.exists():
-                final_out_path.unlink()
-            shutil.copy2(temp_out_path, final_out_path)
-            print(f"copied executable: {temp_out_path} -> {final_out_path}")
-        except Exception as e:
-            print(f"warning: failed to copy to target directory: {e}")
-            # Return the temp path if copy fails
-            return temp_out_path
+    # Check if executable was created successfully
+    if final_out_path.exists():
+        print(f"built: {final_out_path}")
         return final_out_path
     else:
-        raise RuntimeError(f"executable not created: {temp_out_path}")
+        raise RuntimeError(f"executable not created: {final_out_path}")
 
 
 def ensure_clang_installed(install: bool = False):
@@ -591,21 +811,64 @@ def ensure_clang_installed(install: bool = False):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--node-dir", required=True)
-    parser.add_argument("--profile", default="debug")
+    parser.add_argument("--profile", default=None, help="build profile: debug or release (overrides config)")
     parser.add_argument("--dora-target")
     parser.add_argument("--skip-build-packages", action="store_true", help="skip attempting to cargo build Dora packages in workspace")
     parser.add_argument("--fetch-dora", action="store_true", help="clone and build Dora automatically into third_party/dora")
-    parser.add_argument("--dora-git", default="https://github.com/dora-rs/dora", help="git URL to Dora repo (used with --fetch-dora)")
-    parser.add_argument("--dora-rev", default=None, help="git ref to checkout when fetching Dora (optional)")
-    parser.add_argument("--out", default="node")
+    parser.add_argument("--dora-git", default=None, help="git URL to Dora repo (overrides config)")
+    parser.add_argument("--dora-rev", default=None, help="git ref to checkout when fetching Dora (overrides config)")
+    parser.add_argument("--out", default=None, help="output executable name (defaults to node name from config)")
     parser.add_argument("--install-clang", action="store_true", help="if clang is missing, attempt to download a portable LLVM and add it to PATH for this run")
+    parser.add_argument("--config", default=None, help="path to doracxx.toml configuration file")
+    parser.add_argument("--no-config", action="store_true", help="disable automatic config loading")
+    parser.add_argument("--no-auto-prepare", action="store_true", help="disable automatic Dora preparation")
     args = parser.parse_args()
 
     node_dir = Path(args.node_dir).resolve()
     build_dir = node_dir / "build"
     build_dir.mkdir(exist_ok=True)
 
-    profile = args.profile
+    # Load configuration if available and not disabled
+    config = None
+    if not args.no_config:
+        try:
+            if args.config:
+                config = load_config(args.config)
+            else:
+                # Look for doracxx.toml in node directory first, then find project root
+                project_root = find_project_root(node_dir)
+                config_candidates = [
+                    node_dir / "doracxx.toml",
+                    project_root / "doracxx.toml"
+                ]
+                for config_path in config_candidates:
+                    if config_path.exists():
+                        config = load_config(config_path)
+                        print(f"📋 Loaded configuration: {config_path}")
+                        break
+        except Exception as e:
+            print(f"⚠️  Warning: Failed to load configuration: {e}")
+            print("Continuing with command-line arguments only...")
+    
+    # Determine settings (command-line overrides config)
+    if config:
+        profile = args.profile or config.build.profile
+        dora_git = args.dora_git or config.node.dora_git or "https://github.com/dora-rs/dora"
+        dora_rev = args.dora_rev or config.node.dora_rev
+        out_name = args.out or config.node.name
+        install_clang = args.install_clang or config.build.install_clang
+    else:
+        profile = args.profile or "debug"
+        dora_git = args.dora_git or "https://github.com/dora-rs/dora"
+        dora_rev = args.dora_rev
+        out_name = args.out or "node"
+        install_clang = args.install_clang
+
+    print(f"🔧 Building node: {out_name}")
+    print(f"📁 Node directory: {node_dir}")
+    print(f"🏗️  Build profile: {profile}")
+    if config:
+        print(f"📦 Dependencies: {len(config.dependencies)}")
 
     # If the node appears to be a native C++ node (contains .cc sources), we
     # should not attempt to cargo-build Dora Rust packages by default because
@@ -617,23 +880,36 @@ def main():
             print("detected C++ sources in node; enabling --skip-build-packages to avoid cargo builds")
         args.skip_build_packages = True
 
-    # Prefer an explicit argument, then env, then cached dora, then local dora,
-    # otherwise fall back to the current workspace target dir.
+    # Prefer an explicit argument, then env, then ensure Dora is prepared
     dora_target = args.dora_target or os.environ.get("DORA_TARGET_DIR")
     if not dora_target:
-        dora_target = find_dora_target_dir(args.dora_git, args.dora_rev)
-        print(f"Using Dora target directory: {dora_target}")
+        if not args.no_auto_prepare:
+            # Automatically ensure Dora is prepared with the right version
+            try:
+                dora_target = ensure_dora_prepared(dora_git, dora_rev, profile)
+                print(f"Using Dora target directory: {dora_target}")
+            except Exception as e:
+                print(f"❌ Failed to prepare Dora automatically: {e}")
+                # Fallback to manual target detection
+                dora_target = find_dora_target_dir(dora_git, dora_rev)
+                print(f"Using fallback Dora target directory: {dora_target}")
+        else:
+            # Manual mode - just find existing target
+            dora_target = find_dora_target_dir(dora_git, dora_rev)
+            print(f"Using Dora target directory: {dora_target}")
+    else:
+        print(f"Using explicit Dora target directory: {dora_target}")
 
     # If requested, fetch Dora and build required packages
     if args.fetch_dora:
         # Use global cache for fetched Dora
-        vendor = get_dora_cache_path(args.dora_git, args.dora_rev)
-        print(f"Fetching Dora into global cache {vendor} from {args.dora_git}...")
-        repo = git_clone(args.dora_git, vendor, args.dora_rev)
+        vendor = get_dora_cache_path(dora_git, dora_rev)
+        print(f"Fetching Dora into global cache {vendor} from {dora_git}...")
+        repo = git_clone(dora_git, vendor, dora_rev)
         
         # build the entire Dora workspace to ensure cxxbridge outputs are generated
         cargo_cmd = [os.environ.get("CARGO", "cargo"), "build", "--workspace"]
-        if args.profile == "release":
+        if profile == "release":
             cargo_cmd.append("--release")
         print("Running:", " ".join(cargo_cmd), "in", repo)
         try:
@@ -653,7 +929,7 @@ def main():
         ]
         for m in manifests:
             if m.exists():
-                build_manifest(m, profile=args.profile)
+                build_manifest(m, profile=profile)
 
     # try to build packages if present (when Dora not fetched into repo we still attempt generic package builds)
     if not args.fetch_dora and not args.skip_build_packages:
@@ -663,17 +939,20 @@ def main():
     # Do not copy cxxbridge outputs; pass Dora target to compiler so it can pick up
     # generated sources and include dirs directly.
     # If requested, try to ensure clang is available (downloads to third_party/llvm if needed)
-    if args.install_clang:
+    if install_clang:
         ensure_clang_installed(install=True)
 
     try:
-        out = compile_node(node_dir, build_dir, args.out, profile, dora_target, extras=["-l", "dora_node_api_cxx"], dora_git=args.dora_git, dora_rev=args.dora_rev)
+        out = compile_node(node_dir, build_dir, out_name, profile, dora_target, 
+                          extras=["-l", "dora_node_api_cxx"], config=config, 
+                          dora_git=dora_git, dora_rev=dora_rev)
         print("built:", out)
     except Exception as e:
         print(f"compilation failed: {e}")
         # Check if the executable was actually created despite the error in either location
-        expected_exe_build = build_dir / (args.out + (".exe" if os.name == "nt" else ""))
-        expected_exe_target = Path.cwd() / "target" / profile / (args.out + (".exe" if os.name == "nt" else ""))
+        project_root = find_project_root(node_dir)
+        expected_exe_build = build_dir / (out_name + (".exe" if os.name == "nt" else ""))
+        expected_exe_target = project_root / "target" / profile / (out_name + (".exe" if os.name == "nt" else ""))
         
         if expected_exe_target.exists():
             print(f"However, executable was successfully created in target: {expected_exe_target}")

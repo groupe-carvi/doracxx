@@ -21,18 +21,37 @@ from .cache import get_doracxx_cache_dir, cache_info, cache_clean, cache_clean_d
 def _run_script(name: str, args=None):
     """Run a script from the doracxx package"""
     args = args or []
-    # Find the script in the current package directory
-    package_root = Path(__file__).resolve().parent
-    script = package_root / name
     
     # If invoked via `uv run <cmd> -- --arg ...` the uv runner may forward a leading
     # '--' as the first argv; strip it so the target script receives only its flags.
     if args and args[0] == "--":
         args = args[1:]
     
-    cmd = [sys.executable, str(script)] + args
-    print("$", " ".join(cmd))
-    subprocess.check_call(cmd)
+    # Import and run the function directly instead of subprocess
+    if name == "build-cxx-node.py":
+        from . import build_cxx_node
+        # Save original sys.argv and replace it temporarily
+        original_argv = sys.argv
+        try:
+            sys.argv = [name] + args
+            build_cxx_node.main()
+        finally:
+            sys.argv = original_argv
+    elif name == "prepare-dora.py":
+        from . import prepare_dora
+        original_argv = sys.argv
+        try:
+            sys.argv = [name] + args
+            prepare_dora.main()
+        finally:
+            sys.argv = original_argv
+    else:
+        # Fallback to subprocess for unknown scripts
+        package_root = Path(__file__).resolve().parent
+        script = package_root / name
+        cmd = [sys.executable, str(script)] + args
+        print("$", " ".join(cmd))
+        subprocess.check_call(cmd)
 
 
 def build_node():
@@ -67,6 +86,9 @@ def main():
         # Remove 'prepare' from args and call prepare_dora
         sys.argv = [sys.argv[0]] + sys.argv[2:]
         prepare_dora()
+    elif subcommand in ["init", "new"]:
+        # Create a new doracxx.toml configuration
+        init_config()
     elif subcommand == "cache":
         # Handle cache subcommands
         if len(sys.argv) < 3:
@@ -91,6 +113,78 @@ def main():
         sys.exit(1)
 
 
+def init_config():
+    """Initialize a new doracxx.toml configuration file"""
+    try:
+        from .config import create_example_config
+    except ImportError:
+        # When run directly, import from the same directory
+        sys.path.insert(0, str(Path(__file__).parent))
+        from config import create_example_config
+    
+    args = sys.argv[2:] if len(sys.argv) > 2 else []
+    
+    # Parse arguments for init command
+    output_path = None
+    force = False
+    
+    i = 0
+    while i < len(args):
+        if args[i] in ["-o", "--output"]:
+            if i + 1 < len(args):
+                output_path = args[i + 1]
+                i += 2
+            else:
+                print("Error: --output requires a path")
+                return
+        elif args[i] in ["-f", "--force"]:
+            force = True
+            i += 1
+        elif args[i] in ["-h", "--help"]:
+            print("""
+doracxx init - Create a new doracxx.toml configuration file
+
+Usage: doracxx init [options]
+
+Options:
+  -o, --output PATH    Output path for the configuration file (default: doracxx.toml)
+  -f, --force         Overwrite existing file
+  -h, --help          Show this help message
+
+Examples:
+  doracxx init                           # Create doracxx.toml in current directory
+  doracxx init -o my-node/doracxx.toml   # Create in specific location
+  doracxx init -f                        # Overwrite existing file
+""")
+            return
+        else:
+            print(f"Unknown option: {args[i]}")
+            print("Use 'doracxx init --help' for usage information")
+            return
+    
+    # Determine output path
+    if output_path is None:
+        output_path = Path.cwd() / "doracxx.toml"
+    else:
+        output_path = Path(output_path)
+    
+    # Check if file exists and force not specified
+    if output_path.exists() and not force:
+        print(f"Configuration file already exists: {output_path}")
+        print("Use --force to overwrite or specify a different path with --output")
+        return
+    
+    try:
+        created_path = create_example_config(output_path)
+        print(f"✅ Created configuration file: {created_path}")
+        print("\n📋 Next steps:")
+        print("1. Edit the configuration file to match your project")
+        print("2. Add your dependencies to the [dependencies] section")
+        print("3. Build your node with: doracxx build --node-dir .")
+    except Exception as e:
+        print(f"❌ Error creating configuration file: {e}")
+
+
 def print_help():
     """Print help information for doracxx command"""
     help_text = """
@@ -99,6 +193,7 @@ doracxx - A cross-platform C++ build system for Dora dataflow nodes
 Usage: doracxx <command> [options]
 
 Commands:
+  init, new      Create a new doracxx.toml configuration file
   build, b       Build a C++ Dora node
   prepare, p     Prepare Dora environment and dependencies
   cache          Manage global cache (~/.doracxx)
@@ -108,15 +203,23 @@ Commands:
   help           Show this help message
 
 Examples:
-  doracxx build --node-dir nodes/my-node --profile release --out my-node
+  doracxx init                                   # Create new doracxx.toml
+  doracxx build --node-dir nodes/my-node        # Build with CLI args
+  doracxx build --node-dir .                    # Build using doracxx.toml
   doracxx prepare --profile release
   doracxx cache info
   doracxx cache clean-dora
   doracxx help
 
+Configuration:
+  doracxx automatically looks for doracxx.toml in the node directory or current
+  working directory. This file can define dependencies, build settings, and
+  node properties. Use 'doracxx init' to create an example configuration.
+
 For detailed options for each command, use:
   doracxx build --help
   doracxx prepare --help
+  doracxx init --help
 
 Note: doracxx now uses a global cache (~/.doracxx) to share dependencies
 between projects. Use --use-local flag with prepare to use project-local mode.

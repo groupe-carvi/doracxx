@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "A cross-platform C++ build system for Dora dataflow nodes with automatic dependency resolution and modern project structure."
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["uv", "rich"]
+dependencies = ["uv", "rich", "tomli ; python_version<'3.11'"]
 authors = [
     {name = "Groupe Carvi", email = "contact@groupe-carvi.com"}
 ]
