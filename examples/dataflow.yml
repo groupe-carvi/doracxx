@@ -1,10 +1,10 @@
 nodes:
   - id: simple-cpp-node
-    build: doracxx build --node-dir examples/simple-node --profile release --out simple-node
+    build: doracxx build --node-dir simple-node --profile release
     path: target/release/simple-node
     inputs:
       # Example inputs - adjust based on your needs
       tick: dora/timer/millis/1000
     outputs:
       # Example outputs - adjust based on your needs
-      result: simple-node/output
+      - result
