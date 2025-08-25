@@ -1006,6 +1006,7 @@ def main():
                           extras=["-l", "dora_node_api_cxx"], config=config, 
                           dora_git=dora_git, dora_rev=dora_rev)
         print("built:", out)
+        sys.exit(0)  # Explicit successful exit
     except Exception as e:
         print(f"compilation failed: {e}")
         # Check if the executable was actually created despite the error in target location
@@ -1015,6 +1016,7 @@ def main():
         if expected_exe_target.exists():
             print(f"However, executable was successfully created in target: {expected_exe_target}")
             print("built:", expected_exe_target)
+            sys.exit(0)  # Explicit successful exit even if there was an exception
         else:
             print(f"Executable not found in target: {expected_exe_target}")
             sys.exit(1)
