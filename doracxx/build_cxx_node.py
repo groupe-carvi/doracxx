@@ -923,7 +923,7 @@ def main():
         out_name = args.out or "node"
         install_clang = args.install_clang
 
-    print(f"🔧 Building node: {out_name}")
+    print(f"[BUILD] Building node: {out_name}")
     print(f"[NODE] Node directory: {node_dir}")
     print(f"[BUILD] Build profile: {profile}")
     if config:
