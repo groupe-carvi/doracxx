@@ -89,8 +89,26 @@ def main():
     elif subcommand in ["init", "new"]:
         # Create a new doracxx.toml configuration
         init_config()
+    elif subcommand == "clean":
+        # Handle clean command with options
+        if len(sys.argv) >= 3:
+            if sys.argv[2] == "--cache":
+                cache_clean()
+            elif sys.argv[2] == "--dora":
+                cache_clean_dora()
+            else:
+                print(f"Unknown clean option: {sys.argv[2]}")
+                print("Clean options:")
+                print("  --cache      Clear entire cache")
+                print("  --dora       Clear only Dora from cache")
+                print("\nUsage: doracxx clean [--cache|--dora]")
+        else:
+            print("Clean options:")
+            print("  --cache      Clear entire cache")
+            print("  --dora       Clear only Dora from cache")
+            print("\nUsage: doracxx clean [--cache|--dora]")
     elif subcommand == "cache":
-        # Handle cache subcommands
+        # Handle cache subcommands (legacy support)
         if len(sys.argv) < 3:
             print("Cache subcommands: info, clean, clean-dora")
             return
@@ -196,7 +214,10 @@ Commands:
   init, new      Create a new doracxx.toml configuration file
   build, b       Build a C++ Dora node
   prepare, p     Prepare Dora environment and dependencies
-  cache          Manage global cache (~/.doracxx)
+  clean          Clean cache
+    --cache      Clear entire cache
+    --dora       Clear only Dora from cache
+  cache          Manage global cache (~/.doracxx) [legacy]
     info         Show cache information
     clean        Clear entire cache
     clean-dora   Clear only Dora from cache
