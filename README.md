@@ -199,7 +199,7 @@ your-node/
     └── release/         # Release builds
 ```
 
-### Complete doracxx.toml Example
+### doracxx.toml Example
 
 ```toml
 [node]
