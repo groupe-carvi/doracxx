@@ -56,7 +56,7 @@ def _run_script(name: str, args=None):
 
 def build_node():
     """Build a C++ Dora node with automatic dependency resolution"""
-    # Transform positional argument to --node-dir
+    # Transform positional argument to --node-dir if provided
     args = list(sys.argv[1:])
     if args and not args[0].startswith('-'):
         # First non-option argument is the node directory

@@ -30,6 +30,12 @@ include_dirs = ["include"]
 lib_dirs = []
 libraries = []
 
+# Source files configuration
+# If not specified, all .cpp/.cc files in src/ will be included
+sources = ["src/node.cc"]
+# Exclude patterns for source files (optional)
+exclude_sources = ["**/*test*.cpp", "**/*test*.cc", "test_*.cpp", "test_*.cc"]
+
 # Enable automatic clang installation if not found (Windows)
 install_clang = false
 

@@ -280,8 +280,43 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
 
     # Discover all C/C++ source files in the node directory
     srcs = []
-    for pattern in ["**/*.cc", "**/*.cpp", "**/*.c"]:
-        srcs.extend(node_dir.glob(pattern))
+    
+    # Check if sources are specified in config
+    if config and hasattr(config.build, 'sources') and config.build.sources:
+        # Use explicitly configured sources
+        for src_pattern in config.build.sources:
+            if "*" in src_pattern or "?" in src_pattern:
+                # Pattern matching
+                matched_files = list(node_dir.glob(src_pattern))
+                srcs.extend(matched_files)
+            else:
+                # Direct file path
+                src_path = node_dir / src_pattern
+                if src_path.exists():
+                    srcs.append(src_path)
+    else:
+        # Default behavior: discover all C/C++ files
+        for pattern in ["**/*.cc", "**/*.cpp", "**/*.c"]:
+            srcs.extend(node_dir.glob(pattern))
+    
+    # Apply exclude patterns if specified
+    if config and hasattr(config.build, 'exclude_sources') and config.build.exclude_sources:
+        import fnmatch
+        excluded_srcs = []
+        for src in srcs:
+            relative_path = str(src.relative_to(node_dir))
+            should_exclude = False
+            for exclude_pattern in config.build.exclude_sources:
+                if fnmatch.fnmatch(relative_path, exclude_pattern):
+                    should_exclude = True
+                    break
+            if should_exclude:
+                excluded_srcs.append(src)
+                print(f"🚫 Excluding source file: {relative_path}")
+        
+        # Remove excluded files
+        for excluded in excluded_srcs:
+            srcs.remove(excluded)
     
     if not srcs:
         raise RuntimeError("no C/C++ sources found in node dir (looked for .cc, .cpp, .c files)")
@@ -810,7 +845,7 @@ def ensure_clang_installed(install: bool = False):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--node-dir", required=True)
+    parser.add_argument("--node-dir", default=None, help="directory containing the node (defaults to current directory if it contains doracxx.toml)")
     parser.add_argument("--profile", default=None, help="build profile: debug or release (overrides config)")
     parser.add_argument("--dora-target")
     parser.add_argument("--skip-build-packages", action="store_true", help="skip attempting to cargo build Dora packages in workspace")
@@ -824,7 +859,31 @@ def main():
     parser.add_argument("--no-auto-prepare", action="store_true", help="disable automatic Dora preparation")
     args = parser.parse_args()
 
-    node_dir = Path(args.node_dir).resolve()
+    # Auto-detect node directory if not specified
+    if args.node_dir is None:
+        # Check if current directory contains doracxx.toml
+        current_dir = Path.cwd()
+        if (current_dir / "doracxx.toml").exists():
+            node_dir = current_dir
+            print(f"📁 Auto-detected node directory: {node_dir}")
+        else:
+            # Try to find project root and check if it's a node directory
+            try:
+                project_root = find_project_root(current_dir)
+                if (project_root / "doracxx.toml").exists():
+                    node_dir = project_root
+                    print(f"📁 Auto-detected node directory at project root: {node_dir}")
+                else:
+                    print("❌ Error: No doracxx.toml found in current directory or project root.")
+                    print("   Please specify --node-dir or run from a directory containing doracxx.toml")
+                    sys.exit(1)
+            except Exception:
+                print("❌ Error: No doracxx.toml found in current directory.")
+                print("   Please specify --node-dir or run from a directory containing doracxx.toml")
+                sys.exit(1)
+    else:
+        node_dir = Path(args.node_dir).resolve()
+
     build_dir = node_dir / "build"
     build_dir.mkdir(exist_ok=True)
 
@@ -949,20 +1008,15 @@ def main():
         print("built:", out)
     except Exception as e:
         print(f"compilation failed: {e}")
-        # Check if the executable was actually created despite the error in either location
+        # Check if the executable was actually created despite the error in target location
         project_root = find_project_root(node_dir)
-        expected_exe_build = build_dir / (out_name + (".exe" if os.name == "nt" else ""))
         expected_exe_target = project_root / "target" / profile / (out_name + (".exe" if os.name == "nt" else ""))
         
         if expected_exe_target.exists():
             print(f"However, executable was successfully created in target: {expected_exe_target}")
             print("built:", expected_exe_target)
-        elif expected_exe_build.exists():
-            print(f"However, executable was successfully created in build: {expected_exe_build}")
-            print("built:", expected_exe_build)
         else:
             print(f"Executable not found in target: {expected_exe_target}")
-            print(f"Executable not found in build: {expected_exe_build}")
             sys.exit(1)
 
 def load_msvc_env():

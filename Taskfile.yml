@@ -5,8 +5,7 @@ tasks:
     cmds:
     - task: example:build-simple-node
   example:build-simple-node:
-    deps:
-      - example:prepare-dora
+    deps: [example:create-venv]
     desc: "Build and run the 'simple-node' example using doracxx"
     dir: "./examples"
     cmds:
@@ -27,10 +26,3 @@ tasks:
       - uv pip install -e ../
     status:
       - test -d .venv
-  example:prepare-dora:
-    dir: "./examples"
-    deps:
-      - example:create-venv
-    desc: "Setup Dora for the example (optimized - only C++ APIs)"
-    cmds:
-      - uv run doracxx prepare

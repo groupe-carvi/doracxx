@@ -32,6 +32,12 @@ include_dirs = ["include", "deps/custom/include"]
 lib_dirs = ["lib"]
 libraries = ["pthread"]
 
+# Source files configuration
+# If not specified, all .cpp/.cc files in src/ will be included
+# sources = ["src/main.cc", "src/processor.cc"]
+# Exclude patterns for source files (optional)
+# exclude_sources = ["**/*test*.cpp", "**/*test*.cc", "test_*.cpp", "test_*.cc"]
+
 # CMake specific options (when system = "cmake")
 [build.cmake_options]
 CMAKE_BUILD_TYPE = "Debug"

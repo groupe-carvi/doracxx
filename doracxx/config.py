@@ -117,6 +117,10 @@ class BuildConfig:
     debug_info: bool = True
     warnings_as_errors: bool = False
     
+    # Source file configuration
+    sources: Optional[List[str]] = None
+    exclude_sources: Optional[List[str]] = None
+    
     # Compiler flags
     cflags: List[str] = field(default_factory=list)
     cxxflags: List[str] = field(default_factory=list)
