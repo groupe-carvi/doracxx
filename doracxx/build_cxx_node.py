@@ -9,6 +9,7 @@ import tarfile
 from pathlib import Path
 import tempfile
 import argparse
+from typing import Optional, Union
 
 # Import cache functions with proper path handling for different execution contexts
 try:
@@ -120,9 +121,117 @@ def git_clone(url, dest, rev=None):
     return dest
 
 
-def run(cmd, cwd=None, env=None):
+def run(cmd, cwd=None, env=None, capture_output=False, timeout=300, config=None):
+    """Execute a command with proper output management.
+    
+    Args:
+        cmd: Command to execute
+        cwd: Working directory
+        env: Environment variables
+        capture_output: If True, capture and return output instead of streaming
+        timeout: Timeout in seconds (default 5 minutes)
+        config: DoracxxConfig for custom warning patterns
+    
+    Returns:
+        subprocess.CompletedProcess if capture_output=True, None otherwise
+    """
     print("$ ", " ".join(cmd))
-    subprocess.check_call(cmd, cwd=cwd, env=env)
+    
+    if capture_output:
+        # For commands where we need to capture output
+        result = subprocess.run(
+            cmd, 
+            cwd=cwd, 
+            env=env, 
+            capture_output=True, 
+            text=True, 
+            timeout=timeout
+        )
+        if result.returncode != 0:
+            raise subprocess.CalledProcessError(result.returncode, cmd, result.stdout, result.stderr)
+        return result
+    else:
+        # For compilation commands that may produce large output
+        # Use PIPE to avoid hanging on large outputs, but don't accumulate in memory
+        process = subprocess.Popen(
+            cmd, 
+            cwd=cwd, 
+            env=env, 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,  # Line buffered
+            universal_newlines=True
+        )
+        
+        try:
+            # Stream output line by line to avoid memory accumulation
+            if process.stdout:
+                custom_patterns = config.build.warning_filter_patterns if config else None
+                for line in iter(process.stdout.readline, ''):
+                    # Only print important lines to reduce noise
+                    line = line.rstrip()
+                    if line and should_print_line(line, custom_patterns):
+                        print(line)
+            
+            # Wait for process to complete with timeout
+            process.wait(timeout=timeout)
+            
+            if process.returncode != 0:
+                raise subprocess.CalledProcessError(process.returncode, cmd)
+                
+        except subprocess.TimeoutExpired:
+            process.kill()
+            raise subprocess.TimeoutExpired(cmd, timeout)
+        finally:
+            if process.stdout:
+                process.stdout.close()
+
+
+def should_print_line(line, custom_patterns=None):
+    """Determine if a compiler output line should be printed.
+    
+    This filters out excessive warning spam while keeping important information.
+    
+    Args:
+        line: The output line to check
+        custom_patterns: Additional patterns to filter (list of strings)
+    """
+    line_lower = line.lower()
+    
+    # Always print errors
+    if any(keyword in line_lower for keyword in ['error', 'fatal', 'failed', 'cannot']):
+        return True
+    
+    # Print progress indicators
+    if any(keyword in line_lower for keyword in ['building', 'compiling', 'linking', 'finished']):
+        return True
+    
+    # Skip warning spam patterns commonly seen with MSVC templates
+    warning_spam_patterns = [
+        'warning c4996',  # MSVC deprecation warnings
+        'warning c4244',  # Conversion warnings
+        'warning c4267',  # Size conversion warnings
+        'warning c4101',  # Unreferenced local variable
+        'warning c4189',  # Local variable initialized but not referenced
+        'note: see declaration of',  # MSVC note spam
+        'note: see reference to',    # Template instantiation notes
+    ]
+    
+    # Add custom patterns if provided
+    if custom_patterns:
+        warning_spam_patterns.extend(pattern.lower() for pattern in custom_patterns)
+    
+    for pattern in warning_spam_patterns:
+        if pattern in line_lower:
+            return False
+    
+    # For other warnings, only print occasionally to show progress
+    if 'warning' in line_lower:
+        # Use hash to consistently show some warnings but not all
+        return hash(line) % 20 == 0  # Show ~5% of warnings
+    
+    return True
 
 
 def build_package(pkg):
@@ -504,12 +613,24 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
         # Add custom compiler flags from config, converting GCC/Clang flags to MSVC equivalents
         if config:
             msvc_flags = []
+            has_warning_suppression = False
+            
+            # Check for global warning suppression
+            if config.build.suppress_warnings:
+                msvc_flags.append("/w")  # Disable all warnings
+                has_warning_suppression = True
+            
             for flag in config.build.cxxflags:
                 # Convert common GCC/Clang flags to MSVC equivalents
                 if flag == "-Wall":
-                    msvc_flags.append("/W3")  # MSVC equivalent of -Wall
+                    if not config.build.suppress_warnings:
+                        msvc_flags.append("/W3")  # MSVC equivalent of -Wall
                 elif flag == "-Wextra":
-                    msvc_flags.append("/W4")  # MSVC equivalent of -Wextra
+                    if not config.build.suppress_warnings:
+                        msvc_flags.append("/W4")  # MSVC equivalent of -Wextra
+                elif flag == "-w":
+                    msvc_flags.append("/w")  # Disable all warnings
+                    has_warning_suppression = True
                 elif flag == "-O2":
                     msvc_flags.append("/O2")  # Optimization level 2
                 elif flag == "-O3":
@@ -523,6 +644,22 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
                     print(f"[WARN] Skipping incompatible flag for MSVC: {flag}")
                 else:
                     msvc_flags.append(flag)
+            
+            # Auto-detect problematic dependencies and add warning suppression
+            if not has_warning_suppression and config.build.auto_suppress_verbose_deps and dep_manager:
+                problematic_deps = ['rs_driver', 'opencv', 'pcl', 'boost']
+                for dep_name in problematic_deps:
+                    if any(dep_name.lower() in dep_key.lower() for dep_key in dep_manager.config.dependencies.keys()):
+                        print(f"[INFO] Detected potentially verbose dependency '{dep_name}', adding targeted warning suppression")
+                        msvc_flags.append("/wd4996")  # Disable deprecation warnings
+                        msvc_flags.append("/wd4244")  # Disable conversion warnings
+                        msvc_flags.append("/wd4267")  # Disable size conversion warnings
+                        msvc_flags.append("/wd4101")  # Disable unreferenced variable warnings
+                        msvc_flags.append("/wd4189")  # Disable unused variable warnings
+                        msvc_flags.append("/wd4251")  # Disable template export warnings
+                        msvc_flags.append("/wd4275")  # Disable base class export warnings
+                        break
+            
             cmd.extend(msvc_flags)
         
         # add include dirs for MSVC (Dora includes first)
@@ -604,7 +741,10 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
         
         cmd += libs
         cmd += ["/OUT:" + str(temp_out_path)]
-        run(cmd, cwd=node_dir)
+        
+        # Use configured timeout for build
+        timeout = config.build.build_timeout if config else 300
+        run(cmd, cwd=node_dir, timeout=timeout, config=config)
     else:
         # assume gcc/clang compatible
         cmd = [cc]
@@ -700,7 +840,10 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
         
         cmd += extras
         cmd += ["-o", str(temp_out_path)]
-        run(cmd, cwd=node_dir)
+        
+        # Use configured timeout for build
+        timeout = config.build.build_timeout if config else 300
+        run(cmd, cwd=node_dir, timeout=timeout, config=config)
     
     # Check if executable was created successfully
     if final_out_path.exists():

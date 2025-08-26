@@ -117,6 +117,12 @@ class BuildConfig:
     debug_info: bool = True
     warnings_as_errors: bool = False
     
+    # Warning management
+    suppress_warnings: bool = False  # Global warning suppression
+    auto_suppress_verbose_deps: bool = True  # Auto-suppress warnings for known verbose dependencies
+    warning_filter_patterns: List[str] = field(default_factory=list)  # Custom patterns to filter
+    build_timeout: int = 300  # Build timeout in seconds (5 minutes default)
+    
     # Source file configuration
     sources: Optional[List[str]] = None
     exclude_sources: Optional[List[str]] = None

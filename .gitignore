@@ -102,3 +102,5 @@ uv.lock
 
 # Folder used to store third-party deps
 **/third_party/**
+
+**/out/**

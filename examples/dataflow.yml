@@ -1,7 +1,7 @@
 nodes:
   - id: simple-cpp-node
     build: doracxx build --node-dir simple-node --profile release
-    path: target/release/simple-node
+    path: target/release/simple-node.exe
     inputs:
       # Example inputs - adjust based on your needs
       tick: dora/timer/millis/1000
