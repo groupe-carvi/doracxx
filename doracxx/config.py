@@ -106,6 +106,14 @@ class NodeConfig:
     version: str = "0.1.0"
 
 
+@dataclass  
+class ArrowConfig:
+    """Arrow configuration section"""
+    git: Optional[str] = None
+    rev: Optional[str] = None
+    enabled: bool = True
+
+
 @dataclass
 class BuildConfig:
     """Build configuration section"""
@@ -151,6 +159,7 @@ class DoracxxConfig:
     """Complete doracxx configuration"""
     node: NodeConfig
     build: BuildConfig = field(default_factory=BuildConfig)
+    arrow: Optional[ArrowConfig] = None
     dependencies: Dict[str, Union[GitDependency, VcpkgDependency, SystemDependency, LocalDependency]] = field(default_factory=dict)
 
 
@@ -268,6 +277,16 @@ def load_config(config_path: Optional[Union[str, Path]] = None) -> DoracxxConfig
         install_clang=build_data.get("install_clang", False)
     )
     
+    # Parse arrow section
+    arrow_data = data.get("arrow", {})
+    arrow = None
+    if arrow_data:
+        arrow = ArrowConfig(
+            git=arrow_data.get("git"),
+            rev=arrow_data.get("rev"),
+            enabled=arrow_data.get("enabled", True)
+        )
+    
     # Parse dependencies section
     deps_data = data.get("dependencies", {})
     dependencies = {}
@@ -277,6 +296,7 @@ def load_config(config_path: Optional[Union[str, Path]] = None) -> DoracxxConfig
     return DoracxxConfig(
         node=node,
         build=build,
+        arrow=arrow,
         dependencies=dependencies
     )
 
@@ -302,6 +322,12 @@ toolchain = "auto"
 system = "native"
 profile = "debug"
 std = "c++17"
+
+# Optional: Enable Apache Arrow support
+# [arrow]
+# enabled = true
+# git = "https://github.com/apache/arrow.git"
+# rev = "apache-arrow-15.0.0"
 '''
     
     with open(path, "w", encoding="utf-8") as f:

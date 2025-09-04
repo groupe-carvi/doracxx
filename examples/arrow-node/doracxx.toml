@@ -1,0 +1,65 @@
+# doracxx.toml - Configuration for Dora C++ node with Apache Arrow
+# This is an example configuration file for a node that uses Apache Arrow
+
+[node]
+name = "arrow-node"
+type = "node"
+description = "Example Dora C++ node with Apache Arrow support"
+version = "0.1.0"
+
+[build]
+# Toolchain selection: "auto", "gcc", "clang", "msvc"
+toolchain = "auto"
+
+# Build system: "native", "cmake", "make", "ninja"
+system = "native"
+
+# Build profile: "debug" or "release"
+profile = "debug"
+
+# C++ standard: "c++11", "c++14", "c++17", "c++20", "c++23"
+std = "c++17"
+
+# Additional compiler flags
+cflags = ["-Wall"]
+cxxflags = ["-Wall", "-Wextra"]
+ldflags = []
+
+# Additional include and library paths
+include_dirs = ["include"]
+lib_dirs = []
+libraries = []
+
+# Source files configuration
+# If not specified, all .cpp/.cc files in src/ will be included
+sources = ["src/node.cc"]
+
+# Enable automatic clang installation if not found (Windows)
+install_clang = false
+
+# Enable Apache Arrow support
+[arrow]
+enabled = true
+git = "https://github.com/apache/arrow.git"
+# Use a specific version tag for reproducible builds
+rev = "apache-arrow-15.0.0"
+
+# Dependencies can also include Arrow via git dependency
+[dependencies]
+# Example: Add Arrow as a git dependency (alternative to [arrow] section)
+# [dependencies.arrow]
+# type = "git"
+# url = "https://github.com/apache/arrow.git"
+# tag = "apache-arrow-15.0.0"
+# build_system = "cmake"
+# cmake_options = { ARROW_BUILD_SHARED = "ON", ARROW_COMPUTE = "ON" }
+# include_dirs = ["cpp/src"]
+# libraries = ["arrow"]
+
+# Eigen3 dependency example
+[dependencies.eigen3]
+type = "git"
+url = "https://gitlab.com/libeigen/eigen.git"
+tag = "3.4.0"
+build_system = "cmake"
+include_dirs = ["."]  # Eigen headers are in the root directory

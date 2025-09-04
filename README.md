@@ -13,6 +13,7 @@ After trying different ways to actually build the C and C++ nodes using the exam
 - **Automatic compilation**: Intelligently detects and compiles `.c`, `.cpp` and `.cc` files
 - **Modern project structure**: Organization with `include/`, `deps/`, `src/` and `build/`
 - **Dora resolution**: Compilation and linkage against Dora cxxbridge artifacts
+- **Apache Arrow integration**: Built-in support for Apache Arrow C++ library with automatic fetch, build, and linking
 - **Cross-platform**: Windows support with MSVC/clang-cl, Linux/macOS with GCC/Clang
 - **Dependency management**: Automatic copying of Dora headers and dependency resolution
 - **Global caching**: Shared dependency cache (~/.doracxx) for faster builds across projects
@@ -176,6 +177,46 @@ If you don't have the dora C++ bridge available, running this will clone and pre
 doracxx prepare --dora-git <git-url> --dora-rev <rev> --profile <debug or release>
 ```
 
+### Apache Arrow Support
+
+doracxx provides built-in support for Apache Arrow, enabling high-performance columnar data processing:
+
+```bash
+# Prepare Apache Arrow (automatic during build if configured)
+doracxx prepare arrow
+
+# Prepare specific Arrow version
+doracxx prepare arrow --arrow-rev apache-arrow-15.0.0
+
+# Clean Arrow cache
+doracxx clean --arrow
+```
+
+#### Arrow Configuration
+
+Enable Arrow support in your `doracxx.toml`:
+
+```toml
+[arrow]
+enabled = true
+git = "https://github.com/apache/arrow.git"
+rev = "apache-arrow-15.0.0"  # Use specific version for reproducible builds
+```
+
+Arrow will be automatically:
+- Downloaded and built during compilation
+- Cached globally for reuse across projects  
+- Linked with your node with appropriate include paths
+
+#### Arrow Example
+
+See `examples/arrow-node/` for a complete example showing:
+- Arrow memory pools and arrays
+- Compute engine operations
+- Integration with Dora dataflow
+- Zero-copy data processing
+
+
 ## Project Structure
 
 The builder expects and creates this directory structure:
@@ -246,6 +287,12 @@ exclude_sources = [
 # Enable automatic clang installation if not found (Windows)
 install_clang = false
 
+# Optional: Enable Apache Arrow support
+[arrow]
+enabled = true
+git = "https://github.com/apache/arrow.git"
+rev = "apache-arrow-15.0.0"
+
 [dependencies]
 # Git-based dependency example
 [dependencies.eigen3]
@@ -287,6 +334,11 @@ EIGEN_BUILD_PKGCONFIG = "OFF"
 - **`exclude_sources`**: Glob patterns for files to exclude (e.g., tests)
 - **`include_dirs`**: Additional include directories
 - **`libraries`**: System libraries to link against
+
+#### `[arrow]` Section (Optional)
+- **`enabled`**: Enable Apache Arrow support (true/false)
+- **`git`**: Arrow repository URL (defaults to official Apache Arrow)
+- **`rev`**: Specific git revision, tag, or branch to use
 
 #### `[dependencies]` Section
 Configure external dependencies with different source types:

@@ -15,7 +15,7 @@ import subprocess
 import sys
 import shutil
 from pathlib import Path
-from .cache import get_doracxx_cache_dir, cache_info, cache_clean, cache_clean_dora
+from .cache import get_doracxx_cache_dir, cache_info, cache_clean, cache_clean_dora, cache_clean_arrow
 
 
 def _run_script(name: str, args=None):
@@ -45,6 +45,14 @@ def _run_script(name: str, args=None):
             prepare_dora.main()
         finally:
             sys.argv = original_argv
+    elif name == "prepare-arrow.py":
+        from . import prepare_arrow
+        original_argv = sys.argv
+        try:
+            sys.argv = [name] + args
+            prepare_arrow.main()
+        finally:
+            sys.argv = original_argv
     else:
         # Fallback to subprocess for unknown scripts
         package_root = Path(__file__).resolve().parent
@@ -70,6 +78,11 @@ def prepare_dora():
     _run_script("prepare-dora.py", list(sys.argv[1:]))
 
 
+def prepare_arrow():
+    """Prepare Apache Arrow environment and dependencies"""
+    _run_script("prepare-arrow.py", list(sys.argv[1:]))
+
+
 def main():
     """Main entry point for doracxx command with subcommands"""
     if len(sys.argv) < 2:
@@ -83,9 +96,15 @@ def main():
         sys.argv = [sys.argv[0]] + sys.argv[2:]
         build_node()
     elif subcommand in ["prepare", "prep", "p"]:
-        # Remove 'prepare' from args and call prepare_dora
-        sys.argv = [sys.argv[0]] + sys.argv[2:]
-        prepare_dora()
+        # Handle prepare command with subtype
+        if len(sys.argv) >= 3 and sys.argv[2] in ["arrow", "a"]:
+            # Remove 'prepare arrow' from args and call prepare_arrow
+            sys.argv = [sys.argv[0]] + sys.argv[3:]
+            prepare_arrow()
+        else:
+            # Remove 'prepare' from args and call prepare_dora (default)
+            sys.argv = [sys.argv[0]] + sys.argv[2:]
+            prepare_dora()
     elif subcommand in ["init", "new"]:
         # Create a new doracxx.toml configuration
         init_config()
@@ -96,17 +115,21 @@ def main():
                 cache_clean()
             elif sys.argv[2] == "--dora":
                 cache_clean_dora()
+            elif sys.argv[2] == "--arrow":
+                cache_clean_arrow()
             else:
                 print(f"Unknown clean option: {sys.argv[2]}")
                 print("Clean options:")
                 print("  --cache      Clear entire cache")
                 print("  --dora       Clear only Dora from cache")
+                print("  --arrow      Clear only Arrow from cache")
                 print("\nUsage: doracxx clean [--cache|--dora]")
         else:
             print("Clean options:")
             print("  --cache      Clear entire cache")
             print("  --dora       Clear only Dora from cache")
-            print("\nUsage: doracxx clean [--cache|--dora]")
+            print("  --arrow      Clear only Arrow from cache")
+            print("\nUsage: doracxx clean [--cache|--dora|--arrow]")
     elif subcommand == "cache":
         # Handle cache subcommands (legacy support)
         if len(sys.argv) < 3:
@@ -120,9 +143,11 @@ def main():
             cache_clean()
         elif cache_subcommand == "clean-dora":
             cache_clean_dora()
+        elif cache_subcommand == "clean-arrow":
+            cache_clean_arrow()
         else:
             print(f"Unknown cache subcommand: {cache_subcommand}")
-            print("Available: info, clean, clean-dora")
+            print("Available: info, clean, clean-dora, clean-arrow")
     elif subcommand in ["help", "-h", "--help"]:
         print_help()
     else:
@@ -214,22 +239,27 @@ Commands:
   init, new      Create a new doracxx.toml configuration file
   build, b       Build a C++ Dora node
   prepare, p     Prepare Dora environment and dependencies
+    arrow, a     Prepare Apache Arrow instead of Dora
   clean          Clean cache
     --cache      Clear entire cache
     --dora       Clear only Dora from cache
+    --arrow      Clear only Arrow from cache
   cache          Manage global cache (~/.doracxx) [legacy]
     info         Show cache information
     clean        Clear entire cache
     clean-dora   Clear only Dora from cache
+    clean-arrow  Clear only Arrow from cache
   help           Show this help message
 
 Examples:
   doracxx init                                   # Create new doracxx.toml
   doracxx build --node-dir nodes/my-node        # Build with CLI args
   doracxx build --node-dir .                    # Build using doracxx.toml
-  doracxx prepare --profile release
+  doracxx prepare --profile release             # Prepare Dora
+  doracxx prepare arrow --profile release       # Prepare Arrow
   doracxx cache info
   doracxx cache clean-dora
+  doracxx cache clean-arrow
   doracxx help
 
 Configuration:

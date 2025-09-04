@@ -13,14 +13,14 @@ from typing import Optional, Union
 
 # Import cache functions with proper path handling for different execution contexts
 try:
-    from .cache import get_doracxx_cache_dir, get_dora_cache_path
+    from .cache import get_doracxx_cache_dir, get_dora_cache_path, get_arrow_cache_path
     from .config import load_config, DoracxxConfig, Toolchain, find_project_root
     from .dependencies import setup_dependencies
 except ImportError:
     # When run directly, import from the same directory
     import sys
     sys.path.insert(0, str(Path(__file__).parent))
-    from cache import get_doracxx_cache_dir, get_dora_cache_path
+    from cache import get_doracxx_cache_dir, get_dora_cache_path, get_arrow_cache_path
     from config import load_config, DoracxxConfig, Toolchain, find_project_root
     from dependencies import setup_dependencies
 
@@ -46,6 +46,29 @@ def find_dora_target_dir(dora_git: str | None = None, dora_rev: str | None = Non
     
     # Last resort: current workspace target
     return str(project_root / "target")
+
+
+def find_arrow_install_dir(arrow_git: str | None = None, arrow_rev: str | None = None):
+    """Find Arrow installation directory, checking cache first, then local."""
+    # Check global cache first (version-specific)
+    cache_install = get_arrow_cache_path(arrow_git, arrow_rev) / "install"
+    if cache_install.exists():
+        return str(cache_install)
+    
+    # Fallback: try the default latest cache if specific version not found
+    if arrow_git or arrow_rev:
+        default_cache_install = get_arrow_cache_path() / "install"
+        if default_cache_install.exists():
+            return str(default_cache_install)
+    
+    # Fallback to local third_party (backward compatibility)
+    project_root = find_project_root()
+    local_install = project_root / "third_party" / "arrow" / "install"
+    if local_install.exists():
+        return str(local_install)
+    
+    # Last resort: return expected path (will be created during preparation)
+    return str(project_root / "third_party" / "arrow" / "install")
 
 
 def ensure_dora_prepared(dora_git: str | None = None, dora_rev: str | None = None, profile: str = "debug"):
@@ -98,6 +121,69 @@ def ensure_dora_prepared(dora_git: str | None = None, dora_rev: str | None = Non
         return new_target
     
     return str(dora_target_path)
+
+
+def ensure_arrow_prepared(arrow_git: str | None = None, arrow_rev: str | None = None, profile: str = "debug"):
+    """Ensure Arrow is prepared and built. If not found, automatically prepare it."""
+    import sys
+    
+    # Check if Arrow installation directory exists with required files
+    arrow_install_path = Path(find_arrow_install_dir(arrow_git, arrow_rev))
+    
+    # Check for Arrow artifacts that indicate a successful build
+    arrow_indicators = [
+        arrow_install_path / "include" / "arrow",
+        arrow_install_path / "lib"
+    ]
+    
+    has_arrow = all(p.exists() for p in arrow_indicators)
+    
+    # Additional check for actual library files
+    if has_arrow:
+        lib_dir = arrow_install_path / "lib"
+        has_libs = any(lib_dir.glob("*arrow*"))
+        has_arrow = has_arrow and has_libs
+    
+    if not has_arrow:
+        print("[INFO] Arrow not found or incomplete. Preparing Arrow automatically...")
+        
+        # Import prepare_arrow functionality
+        try:
+            from .prepare_arrow import git_clone_or_update, build_arrow_cpp, verify_arrow_installation
+            from .cache import get_arrow_cache_path
+        except ImportError:
+            sys.path.insert(0, str(Path(__file__).parent))
+            from prepare_arrow import git_clone_or_update, build_arrow_cpp, verify_arrow_installation
+            from cache import get_arrow_cache_path
+        
+        # Determine the repository path
+        vendor = get_arrow_cache_path(arrow_git, arrow_rev)
+        install_dir = vendor / "install"
+        print(f"[CACHE] Preparing Arrow in global cache: {vendor}")
+        
+        # Clone or update Arrow repository
+        arrow_git_url = arrow_git or "https://github.com/apache/arrow.git"
+        repo = git_clone_or_update(arrow_git_url, vendor, arrow_rev)
+        
+        # Build Arrow C++ library
+        print("[BUILD] Building Arrow C++ library...")
+        try:
+            success = build_arrow_cpp(repo, profile, install_dir)
+            if success:
+                verify_arrow_installation(install_dir)
+                print("[OK] Arrow preparation completed")
+            else:
+                print("[ERROR] Arrow build failed")
+                raise RuntimeError("Arrow build failed")
+        except Exception as e:
+            print(f"[ERROR] Arrow preparation failed: {e}")
+            raise
+        
+        # Re-check the installation directory
+        new_install = find_arrow_install_dir(arrow_git, arrow_rev)
+        return new_install
+    
+    return str(arrow_install_path)
 
 
 def git_clone(url, dest, rev=None):
@@ -307,6 +393,51 @@ def find_cxxbridge_artifacts(dora_target: Path, profile: str):
     return include_dirs, generated_cc
 
 
+def find_arrow_artifacts(arrow_install: Path):
+    """Return (include_dirs, lib_dirs, libraries) for Arrow.
+
+    include_dirs: list of directories to pass as -I (/I for MSVC)
+    lib_dirs: list of directories to pass as -L (/LIBPATH for MSVC)
+    libraries: list of library names to link against
+    """
+    include_dirs = []
+    lib_dirs = []
+    libraries = []
+
+    # Arrow include directory
+    arrow_include = arrow_install / "include"
+    if arrow_include.exists():
+        include_dirs.append(str(arrow_include))
+
+    # Arrow library directory
+    arrow_lib = arrow_install / "lib"
+    if arrow_lib.exists():
+        lib_dirs.append(str(arrow_lib))
+        
+        # Find Arrow libraries
+        # Look for both static and shared libraries
+        lib_patterns = ["*arrow*"]
+        for pattern in lib_patterns:
+            for lib_file in arrow_lib.glob(pattern):
+                if lib_file.is_file():
+                    # Extract library name from filename
+                    lib_name = lib_file.stem
+                    
+                    # Handle different library naming conventions
+                    if lib_name.startswith("lib"):
+                        # Unix-style libfoo.so or libfoo.a -> foo
+                        lib_name = lib_name[3:]
+                    elif lib_name.endswith("_shared") or lib_name.endswith("_static"):
+                        # Remove _shared/_static suffix
+                        lib_name = lib_name.rsplit("_", 1)[0]
+                    
+                    # Add main Arrow library
+                    if lib_name not in libraries and "arrow" in lib_name.lower():
+                        libraries.append(lib_name)
+
+    return include_dirs, lib_dirs, libraries
+
+
 def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, dora_target: str, extras: list, config: DoracxxConfig | None = None, dora_git: str | None = None, dora_rev: str | None = None):
     # Extract Dora configuration from config if available
     final_dora_git = dora_git
@@ -449,6 +580,41 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
     if config and config.dependencies:
         print("[DEPS] Setting up dependencies...")
         dep_manager = setup_dependencies(config, node_dir, workspace_target_dir)
+    
+    # Check if Arrow is needed (either explicitly configured or from dependencies)
+    arrow_git = None
+    arrow_rev = None
+    arrow_needed = False
+    
+    # Check if Arrow is configured in arrow config
+    if config and config.arrow and config.arrow.enabled:
+        arrow_git = config.arrow.git
+        arrow_rev = config.arrow.rev
+        arrow_needed = True
+    
+    # Check if Arrow is in dependencies
+    if config and config.dependencies:
+        for dep_name, dep_config in config.dependencies.items():
+            if 'arrow' in dep_name.lower():
+                arrow_needed = True
+                break
+    
+    # Prepare Arrow if needed
+    arrow_include_dirs = []
+    arrow_lib_dirs = []
+    arrow_libraries = []
+    if arrow_needed:
+        try:
+            print("[INFO] Checking Arrow preparation...")
+            arrow_install = ensure_arrow_prepared(arrow_git, arrow_rev, profile)
+            arrow_include_dirs, arrow_lib_dirs, arrow_libraries = find_arrow_artifacts(Path(arrow_install))
+            print(f"[OK] Arrow ready: {arrow_install}")
+            print(f"Arrow include dirs: {arrow_include_dirs}")
+            print(f"Arrow lib dirs: {arrow_lib_dirs}")
+            print(f"Arrow libraries: {arrow_libraries}")
+        except Exception as e:
+            print(f"[WARN] Arrow preparation failed: {e}")
+            print("Continuing without Arrow...")
     
     # Clean target build directory to avoid conflicts with previous builds or parallel builds
     for item in target_build_dir.iterdir():
@@ -666,6 +832,10 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
         for inc in include_dirs:
             cmd += ["/I", inc]
         
+        # Add Arrow include directories
+        for inc in arrow_include_dirs:
+            cmd += ["/I", inc]
+        
         # Add dependency include directories
         if dep_manager:
             dep_include_flags, _, _ = dep_manager.get_compiler_flags()
@@ -711,6 +881,9 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
         if dep_manager:
             libs.extend(dep_manager.libraries)
         
+        # Add Arrow libraries
+        libs.extend(arrow_libraries)
+        
         # Add custom libraries from config
         if config:
             libs.extend(config.build.libraries)
@@ -723,6 +896,10 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
         
         # /LINK and /OUT
         cmd += ["/link", "/LIBPATH:" + str(lib_dir)]
+        
+        # Add Arrow library directories
+        for arrow_lib_dir in arrow_lib_dirs:
+            cmd += ["/LIBPATH:" + arrow_lib_dir]
         
         # Add dependency library directories
         if dep_manager:
@@ -760,6 +937,10 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
         
         # include dirs (Dora includes first)
         for inc in include_dirs:
+            cmd += ["-I", inc]
+        
+        # Add Arrow include directories
+        for inc in arrow_include_dirs:
             cmd += ["-I", inc]
         
         # Add dependency include directories
@@ -808,6 +989,10 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
             _, dep_lib_dir_flags, dep_lib_flags = dep_manager.get_compiler_flags()
             cmd.extend(dep_lib_dir_flags)
         
+        # Add Arrow library directories
+        for arrow_lib_dir in arrow_lib_dirs:
+            cmd += ["-L", arrow_lib_dir]
+        
         # Add custom library directories from config
         if config:
             for lib_dir_path in config.build.lib_dirs:
@@ -828,6 +1013,10 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
         if dep_manager:
             _, _, dep_lib_flags = dep_manager.get_compiler_flags()
             cmd.extend(dep_lib_flags)
+        
+        # Add Arrow libraries
+        for arrow_lib in arrow_libraries:
+            cmd += ["-l", arrow_lib]
         
         # Add custom libraries from config
         if config:

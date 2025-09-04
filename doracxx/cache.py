@@ -109,6 +109,41 @@ def cache_clean():
         print("Cache directory does not exist.")
 
 
+def get_arrow_cache_path(url: str | None = None, rev: str | None = None):
+    """Get the path for cached Arrow installation, versioned by URL and revision.
+    
+    Creates a versioned cache directory:
+    - If rev is specified: arrow-{rev} 
+    - If no rev specified: determines the latest version from git and uses arrow-{latest_version}
+    """
+    cache_dir = get_doracxx_cache_dir()
+    
+    # Create a unique directory name based on URL and revision
+    # Use the repo name from URL (e.g., "arrow" from "https://github.com/apache/arrow")
+    if url:
+        repo_name = url.rstrip('/').split('/')[-1]
+        if repo_name.endswith('.git'):
+            repo_name = repo_name[:-4]
+    else:
+        repo_name = "arrow"
+        url = "https://github.com/apache/arrow.git"  # Default URL for tag lookup
+    
+    if rev:
+        # Include revision in the path for version-specific caching
+        # Sanitize revision name for filesystem compatibility
+        safe_rev = rev.replace('/', '_').replace('\\', '_').replace(':', '_')
+        return cache_dir / f"{repo_name}-{safe_rev}"
+    else:
+        # No specific revision: determine the latest version from git
+        latest_tag = get_latest_git_tag(url)
+        if latest_tag:
+            safe_tag = latest_tag.replace('/', '_').replace('\\', '_').replace(':', '_')
+            return cache_dir / f"{repo_name}-{safe_tag}"
+        else:
+            # Fallback if can't determine latest version
+            return cache_dir / f"{repo_name}-main"
+
+
 def cache_clean_dora():
     """Clean only Dora from the cache"""
     cache_dir = get_doracxx_cache_dir()
@@ -141,5 +176,41 @@ def cache_clean_dora():
             print(f"Cleaned {removed_count} Dora cache director{'ies' if removed_count > 1 else 'y'}")
         else:
             print("No Dora cache directories found.")
+    else:
+        print("Cache directory does not exist.")
+
+
+def cache_clean_arrow():
+    """Clean only Arrow from the cache"""
+    cache_dir = get_doracxx_cache_dir()
+    if cache_dir.exists():
+        print("Cleaning Arrow cache directories...")
+        removed_count = 0
+        for item in cache_dir.iterdir():
+            if item.is_dir() and item.name.startswith('arrow'):
+                try:
+                    # On Windows, git files might be read-only, so we need to handle permissions
+                    if hasattr(shutil, 'rmtree'):
+                        def handle_remove_readonly(func, path, exc):
+                            import stat
+                            import os
+                            if exc[1].errno == 13:  # Permission denied
+                                os.chmod(path, stat.S_IWRITE)
+                                func(path)
+                            else:
+                                raise exc[1]
+                        
+                        shutil.rmtree(item, onerror=handle_remove_readonly)
+                    else:
+                        shutil.rmtree(item)
+                    print(f"  Removed: {item.name}")
+                    removed_count += 1
+                except Exception as e:
+                    print(f"  Error removing {item.name}: {e}")
+        
+        if removed_count > 0:
+            print(f"Cleaned {removed_count} Arrow cache director{'ies' if removed_count > 1 else 'y'}")
+        else:
+            print("No Arrow cache directories found.")
     else:
         print("Cache directory does not exist.")
