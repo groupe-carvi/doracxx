@@ -136,6 +136,15 @@ def build_arrow_cpp(repo: Path, profile: str, install_dir: Path):
         # Reduce dependencies
         "-DARROW_DEPENDENCY_SOURCE=BUNDLED",  # Use bundled dependencies
         "-DARROW_VERBOSE_THIRDPARTY_BUILD=OFF",
+
+        # Additional options to prevent hanging
+        "-DCMAKE_POLICY_DEFAULT_CMP0077=NEW",
+        "-DBUILD_TESTING=OFF",
+        # Force non-interactive mode and reduce verbosity
+        "-DCMAKE_INSTALL_MESSAGE=LAZY",
+        "-DCMAKE_VERBOSE_MAKEFILE=OFF",
+        "-DCMAKE_RULE_MESSAGES=OFF",
+        "-DCMAKE_TARGET_MESSAGES=OFF",
     ]
     
     # Add generator if detected
