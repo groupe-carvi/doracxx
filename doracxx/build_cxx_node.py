@@ -416,24 +416,24 @@ def find_arrow_artifacts(arrow_install: Path):
         
         # Find Arrow libraries
         # Look for both static and shared libraries
-        lib_patterns = ["*arrow*"]
+        lib_patterns = ["libarrow*.so", "libarrow*.a", "arrow*.lib", "arrow*.dll"]
         for pattern in lib_patterns:
             for lib_file in arrow_lib.glob(pattern):
-                if lib_file.is_file():
-                    # Extract library name from filename
-                    lib_name = lib_file.stem
-                    
-                    # Handle different library naming conventions
-                    if lib_name.startswith("lib"):
-                        # Unix-style libfoo.so or libfoo.a -> foo
-                        lib_name = lib_name[3:]
-                    elif lib_name.endswith("_shared") or lib_name.endswith("_static"):
-                        # Remove _shared/_static suffix
-                        lib_name = lib_name.rsplit("_", 1)[0]
-                    
-                    # Add main Arrow library
-                    if lib_name not in libraries and "arrow" in lib_name.lower():
+                if not lib_file.is_file():
+                    continue
+                fname = lib_file.name
+                # For MSVC, use the full .lib filename
+                if fname.endswith('.lib'):
+                    if fname not in libraries:
+                        libraries.append(fname)
+                # For GCC/Clang, use -l<name> (without lib prefix and extension)
+                elif fname.startswith('lib') and (fname.endswith('.so') or fname.endswith('.a')):
+                    lib_name = fname[3:].split('.', 1)[0]
+                    if lib_name not in libraries:
                         libraries.append(lib_name)
+        # Remove duplicates while preserving order
+        seen = set()
+        libraries = [x for x in libraries if not (x in seen or seen.add(x))]
 
     return include_dirs, lib_dirs, libraries
 
