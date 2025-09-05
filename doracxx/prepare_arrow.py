@@ -16,6 +16,9 @@ import subprocess
 from pathlib import Path
 import os
 import shutil
+import json
+import urllib.request
+import urllib.error
 
 # Import cache functions with proper path handling for different execution contexts
 try:
@@ -25,6 +28,20 @@ except ImportError:
     import sys
     sys.path.insert(0, str(Path(__file__).parent))
     from cache import get_doracxx_cache_dir, get_arrow_cache_path
+
+
+def get_latest_arrow_release():
+    """Get the latest stable Arrow release tag from GitHub API"""
+    try:
+        url = "https://api.github.com/repos/apache/arrow/releases/latest"
+        with urllib.request.urlopen(url) as response:
+            data = json.loads(response.read().decode())
+            tag_name = data.get("tag_name", "apache-arrow-21.0.0")  # fallback
+            print(f"Latest Arrow release: {tag_name}")
+            return tag_name
+    except (urllib.error.URLError, json.JSONDecodeError, KeyError) as e:
+        print(f"Warning: Could not fetch latest Arrow release ({e}), using fallback")
+        return "apache-arrow-21.0.0"  # fallback to known stable version
 
 
 def git_clone_or_update(url: str, dest: Path, rev: str | None):
@@ -37,7 +54,9 @@ def git_clone_or_update(url: str, dest: Path, rev: str | None):
             if rev:
                 subprocess.check_call(["git", "-C", str(dest), "checkout", rev])
             else:
-                subprocess.check_call(["git", "-C", str(dest), "checkout", "main"]) 
+                # Get latest stable release if no revision specified
+                latest_rev = get_latest_arrow_release()
+                subprocess.check_call(["git", "-C", str(dest), "checkout", latest_rev]) 
         except subprocess.CalledProcessError:
             print("warning: git update failed, continuing with existing checkout")
         return dest
@@ -46,6 +65,12 @@ def git_clone_or_update(url: str, dest: Path, rev: str | None):
     cmd = ["git", "clone", url, str(dest)]
     if rev:
         cmd += ["--branch", rev]
+    else:
+        # If no revision specified, clone and then checkout latest stable release
+        subprocess.check_call(cmd)
+        latest_rev = get_latest_arrow_release()
+        subprocess.check_call(["git", "-C", str(dest), "checkout", latest_rev])
+        return dest
     subprocess.check_call(cmd)
     return dest
 
@@ -147,6 +172,13 @@ def build_arrow_cpp(repo: Path, profile: str, install_dir: Path):
         "-DCMAKE_TARGET_MESSAGES=OFF",
     ]
     
+    # Add Windows-specific CMake flags to avoid compilation conflicts
+    if os.name == "nt":
+        cmake_args.extend([
+            "-DCMAKE_CXX_FLAGS=-DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_CRT_SECURE_NO_WARNINGS",
+            "-DCMAKE_C_FLAGS=-DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_CRT_SECURE_NO_WARNINGS"
+        ])
+    
     # Add generator if detected
     if generator:
         cmake_args.extend(["-G", generator])
@@ -217,7 +249,7 @@ def verify_arrow_installation(install_dir: Path):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--arrow-git", default="https://github.com/apache/arrow.git")
-    p.add_argument("--arrow-rev", default=None, help="Git revision/tag/branch to checkout")
+    p.add_argument("--arrow-rev", default=None, help="Git revision/tag/branch to checkout (default: latest stable release from GitHub)")
     p.add_argument("--profile", choices=("debug", "release"), default="debug")
     p.add_argument("--force-rebuild", action="store_true",
                    help="Force rebuild even if Arrow is already installed")
@@ -226,6 +258,11 @@ def main():
     p.add_argument("--create-symlink", action="store_true",
                    help="Create symlink from third_party/arrow to global cache for backward compatibility")
     args = p.parse_args()
+
+    # If no specific revision is provided, get the latest stable release
+    if args.arrow_rev is None:
+        args.arrow_rev = get_latest_arrow_release()
+        print(f"Using latest stable Arrow release: {args.arrow_rev}")
 
     if args.use_local:
         # Legacy mode: use third_party/arrow in current project

@@ -149,12 +149,17 @@ def ensure_arrow_prepared(arrow_git: str | None = None, arrow_rev: str | None = 
         
         # Import prepare_arrow functionality
         try:
-            from .prepare_arrow import git_clone_or_update, build_arrow_cpp, verify_arrow_installation
+            from .prepare_arrow import git_clone_or_update, build_arrow_cpp, verify_arrow_installation, get_latest_arrow_release
             from .cache import get_arrow_cache_path
         except ImportError:
             sys.path.insert(0, str(Path(__file__).parent))
-            from prepare_arrow import git_clone_or_update, build_arrow_cpp, verify_arrow_installation
+            from prepare_arrow import git_clone_or_update, build_arrow_cpp, verify_arrow_installation, get_latest_arrow_release
             from cache import get_arrow_cache_path
+        
+        # If no specific revision is provided, get the latest stable release
+        if arrow_rev is None:
+            arrow_rev = get_latest_arrow_release()
+            print(f"Using latest stable Arrow release: {arrow_rev}")
         
         # Determine the repository path
         vendor = get_arrow_cache_path(arrow_git, arrow_rev)
@@ -195,7 +200,14 @@ def git_clone(url, dest, rev=None):
             if rev:
                 subprocess.check_call(["git", "-C", str(dest), "checkout", rev])
             else:
-                subprocess.check_call(["git", "-C", str(dest), "checkout", "main"]) 
+                # Import get_latest_arrow_release function
+                try:
+                    from .prepare_arrow import get_latest_arrow_release
+                except ImportError:
+                    sys.path.insert(0, str(Path(__file__).parent))
+                    from prepare_arrow import get_latest_arrow_release
+                latest_rev = get_latest_arrow_release()
+                subprocess.check_call(["git", "-C", str(dest), "checkout", latest_rev]) 
         except Exception:
             pass
         return dest
@@ -776,6 +788,13 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
         std_flag = f"/std:{config.build.std}" if config else "/std:c++17"
         cmd.append(std_flag)
         
+        # Add Windows-specific preprocessor definitions to avoid conflicts with Arrow
+        # These resolve common Windows header conflicts that cause compilation errors
+        cmd.append("/DDISABLE_PCAP_PARSE")  # Disable PCap parsing
+        cmd.append("/DNOMINMAX")            # Prevent Windows min/max macros from conflicting with std::min/std::max
+        cmd.append("/DWIN32_LEAN_AND_MEAN") # Reduce Windows header bloat
+        cmd.append("/D_CRT_SECURE_NO_WARNINGS")  # Disable MSVC security warnings
+        
         # Add custom compiler flags from config, converting GCC/Clang flags to MSVC equivalents
         if config:
             msvc_flags = []
@@ -825,6 +844,24 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
                         msvc_flags.append("/wd4251")  # Disable template export warnings
                         msvc_flags.append("/wd4275")  # Disable base class export warnings
                         break
+            
+            # Add Arrow-specific warning suppressions if Arrow is used
+            if arrow_needed and not has_warning_suppression:
+                print("[INFO] Arrow detected, adding Arrow-specific warning suppressions for MSVC")
+                msvc_flags.append("/wd4996")  # Disable deprecation warnings
+                msvc_flags.append("/wd4244")  # Disable conversion warnings  
+                msvc_flags.append("/wd4267")  # Disable size conversion warnings
+                msvc_flags.append("/wd4101")  # Disable unreferenced variable warnings
+                msvc_flags.append("/wd4189")  # Disable unused variable warnings
+                msvc_flags.append("/wd4251")  # Disable template export warnings (DLL interface)
+                msvc_flags.append("/wd4275")  # Disable base class export warnings
+                msvc_flags.append("/wd4003")  # Disable not enough arguments for macro warnings
+                msvc_flags.append("/wd2589")  # Disable illegal token warnings
+                msvc_flags.append("/wd2059")  # Disable syntax error warnings for macros
+                msvc_flags.append("/wd2143")  # Disable missing tokens warnings
+                msvc_flags.append("/wd3615")  # Disable constexpr function warnings
+                msvc_flags.append("/wd2334")  # Disable unexpected tokens warnings
+                msvc_flags.append("/wd2238")  # Disable unexpected token warnings
             
             cmd.extend(msvc_flags)
         
