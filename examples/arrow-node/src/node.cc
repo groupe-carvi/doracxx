@@ -5,42 +5,62 @@
 #include <arrow/memory_pool.h>
 #include <iostream>
 
-// Main Dora node implementation
-extern "C" {
+// Include Dora headers
+#include "dora-node-api.h"
 
-dora::Result<void> dora_init() {
-    std::cout << "[INFO] Initializing Arrow-enabled Dora node" << std::endl;
-    return {};
-}
+int main() {
+    std::cout << "[INFO] Starting Arrow-enabled Dora node" << std::endl;
+    
+    // Initialize Arrow processor
+    ArrowProcessor processor;
+    
+    // Initialize Dora node
+    auto dora_node = init_dora_node();
+    
+    for (int i = 0; i < 100; i++) {
+        auto event = dora_node.events->next();
+        auto ty = event_type(event);
 
-dora::Result<void> dora_process(const dora::Input& input, dora::Output& output) {
-    static ArrowProcessor processor;
-    
-    std::cout << "[PROCESS] Processing input with Arrow: " << input.id << std::endl;
-    
-    // Convert input data to vector
-    std::vector<uint8_t> input_data(input.data, input.data + input.len);
-    
-    // Process with Arrow
-    auto result = processor.process_with_arrow(input_data);
-    if (!result.has_value()) {
-        std::cerr << "[ERROR] Arrow processing failed" << std::endl;
-        return result.error();
+        if (ty == DoraEventType::AllInputsClosed) {
+            std::cout << "[INFO] All inputs closed, exiting" << std::endl;
+            break;
+        }
+        else if (ty == DoraEventType::Input) {
+            auto input = event_as_input(std::move(event));
+            
+            std::cout << "[PROCESS] Processing input with Arrow: " << std::string(input.id) << std::endl;
+            
+            // Convert input data to vector
+            std::vector<uint8_t> input_data;
+            for (auto byte : input.data) {
+                input_data.push_back(byte);
+            }
+            
+            // Process with Arrow
+            auto result = processor.process_with_arrow(input_data);
+            if (!result.has_value()) {
+                std::cerr << "[ERROR] Arrow processing failed" << std::endl;
+                continue;
+            }
+            
+            // Send output
+            const auto& output_data = result.value();
+            ::rust::Slice<const uint8_t> data_slice{output_data.data(), output_data.size()};
+            auto send_result = send_output(dora_node.send_output, "arrow_output", data_slice);
+            if (!std::string(send_result.error).empty()) {
+                std::cerr << "[ERROR] Failed to send output: " << std::string(send_result.error) << std::endl;
+            } else {
+                std::cout << "[INFO] Successfully sent Arrow output" << std::endl;
+            }
+        }
+        else {
+            std::cerr << "[WARN] Unknown event type " << static_cast<int>(ty) << std::endl;
+        }
     }
     
-    // Send output
-    const auto& output_data = result.value();
-    output.send_data("arrow_output", output_data.data(), output_data.size());
-    
-    return {};
+    std::cout << "[INFO] Arrow-enabled Dora node finished" << std::endl;
+    return 0;
 }
-
-dora::Result<void> dora_destroy() {
-    std::cout << "[INFO] Destroying Arrow-enabled Dora node" << std::endl;
-    return {};
-}
-
-} // extern "C"
 
 // ArrowProcessor implementation
 ArrowProcessor::ArrowProcessor() 
@@ -52,7 +72,7 @@ ArrowProcessor::~ArrowProcessor() {
     std::cout << "[ARROW] Destroyed Arrow processor" << std::endl;
 }
 
-dora::Result<std::vector<uint8_t>> ArrowProcessor::process_with_arrow(
+std::optional<std::vector<uint8_t>> ArrowProcessor::process_with_arrow(
     const std::vector<uint8_t>& input) {
     
     try {
@@ -75,7 +95,8 @@ dora::Result<std::vector<uint8_t>> ArrowProcessor::process_with_arrow(
         // Create Arrow array
         auto array_result = create_arrow_array(values);
         if (!array_result.ok()) {
-            return dora::Result<std::vector<uint8_t>>::error("Failed to create Arrow array");
+            std::cerr << "[ERROR] Failed to create Arrow array: " << array_result.status().ToString() << std::endl;
+            return std::nullopt;
         }
         auto array = array_result.ValueOrDie();
         
@@ -84,7 +105,8 @@ dora::Result<std::vector<uint8_t>> ArrowProcessor::process_with_arrow(
         // Perform computation
         auto sum_result = compute_sum(array);
         if (!sum_result.ok()) {
-            return dora::Result<std::vector<uint8_t>>::error("Failed to compute sum");
+            std::cerr << "[ERROR] Failed to compute sum: " << sum_result.status().ToString() << std::endl;
+            return std::nullopt;
         }
         auto sum_array = sum_result.ValueOrDie();
         
@@ -98,18 +120,18 @@ dora::Result<std::vector<uint8_t>> ArrowProcessor::process_with_arrow(
         std::vector<uint8_t> output_data(sizeof(double));
         std::memcpy(output_data.data(), &sum_value, sizeof(double));
         
-        return dora::Result<std::vector<uint8_t>>::ok(std::move(output_data));
+        return output_data;
         
     } catch (const std::exception& e) {
         std::cerr << "[ERROR] Arrow processing exception: " << e.what() << std::endl;
-        return dora::Result<std::vector<uint8_t>>::error("Arrow processing failed");
+        return std::nullopt;
     }
 }
 
 arrow::Result<std::shared_ptr<arrow::Array>> ArrowProcessor::create_arrow_array(
     const std::vector<double>& data) {
     
-    arrow::DoubleBuilder builder(memory_pool_);
+    arrow::DoubleBuilder builder(arrow::default_memory_pool());
     ARROW_RETURN_NOT_OK(builder.Reserve(data.size()));
     
     for (double value : data) {
@@ -128,10 +150,10 @@ arrow::Result<std::shared_ptr<arrow::Array>> ArrowProcessor::compute_sum(
     using namespace arrow::compute;
     
     // Create compute context
-    ExecContext exec_context(memory_pool_);
+    ExecContext exec_context(arrow::default_memory_pool());
     
-    // Compute sum
-    ARROW_ASSIGN_OR_RAISE(Datum sum_datum, Sum(array, &exec_context));
+    // Compute sum using proper API
+    ARROW_ASSIGN_OR_RAISE(arrow::Datum sum_datum, Sum(array, ScalarAggregateOptions::Defaults(), &exec_context));
     
     return sum_datum.make_array();
 }

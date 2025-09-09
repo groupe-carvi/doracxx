@@ -57,13 +57,13 @@ def get_dora_cache_path(url: str | None = None, rev: str | None = None):
     if rev:
         # Include revision in the path for version-specific caching
         # Sanitize revision name for filesystem compatibility
-        safe_rev = rev.replace('/', '_').replace('\\', '_').replace(':', '_')
+        safe_rev = sanitize_for_filesystem(rev)
         return cache_dir / f"{repo_name}-{safe_rev}"
     else:
         # No specific revision: determine the latest version from git
         latest_tag = get_latest_git_tag(url)
         if latest_tag:
-            safe_tag = latest_tag.replace('/', '_').replace('\\', '_').replace(':', '_')
+            safe_tag = sanitize_for_filesystem(latest_tag)
             return cache_dir / f"{repo_name}-{safe_tag}"
         else:
             # Fallback if can't determine latest version
@@ -131,17 +131,31 @@ def get_arrow_cache_path(url: str | None = None, rev: str | None = None):
     if rev:
         # Include revision in the path for version-specific caching
         # Sanitize revision name for filesystem compatibility
-        safe_rev = rev.replace('/', '_').replace('\\', '_').replace(':', '_')
+        safe_rev = sanitize_for_filesystem(rev)
         return cache_dir / f"{repo_name}-{safe_rev}"
     else:
         # No specific revision: determine the latest version from git
         latest_tag = get_latest_git_tag(url)
         if latest_tag:
-            safe_tag = latest_tag.replace('/', '_').replace('\\', '_').replace(':', '_')
+            safe_tag = sanitize_for_filesystem(latest_tag)
             return cache_dir / f"{repo_name}-{safe_tag}"
         else:
             # Fallback if can't determine latest version
             return cache_dir / f"{repo_name}-main"
+
+
+def sanitize_for_filesystem(name: str) -> str:
+    """Sanitize a string to be safe for use as a filesystem path component."""
+    import re
+    # Replace problematic characters with underscores
+    # This includes: / \ : * ? " < > | ^ { } and other special characters
+    safe_name = re.sub(r'[/\\:*?"<>|^{}]', '_', name)
+    # Remove any leading/trailing dots or spaces
+    safe_name = safe_name.strip('. ')
+    # Ensure it's not empty
+    if not safe_name:
+        safe_name = "default"
+    return safe_name
 
 
 def cache_clean_dora():

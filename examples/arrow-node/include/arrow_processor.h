@@ -5,6 +5,7 @@
 #include <dora-node-api.h>
 #include <memory>
 #include <vector>
+#include <optional>
 
 /**
  * Arrow-enabled Dora node processor
@@ -23,7 +24,7 @@ public:
      * @param output Processed output data
      * @return Status of the operation
      */
-    dora::Result<std::vector<uint8_t>> process_with_arrow(
+    std::optional<std::vector<uint8_t>> process_with_arrow(
         const std::vector<uint8_t>& input);
     
     /**

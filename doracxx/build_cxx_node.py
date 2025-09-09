@@ -9,7 +9,7 @@ import tarfile
 from pathlib import Path
 import tempfile
 import argparse
-from typing import Optional, Union
+from typing import Optional, Union, List
 
 # Import cache functions with proper path handling for different execution contexts
 try:
@@ -149,17 +149,12 @@ def ensure_arrow_prepared(arrow_git: str | None = None, arrow_rev: str | None = 
         
         # Import prepare_arrow functionality
         try:
-            from .prepare_arrow import git_clone_or_update, build_arrow_cpp, verify_arrow_installation, get_latest_arrow_release
+            from .prepare_arrow import git_clone_or_update, build_arrow_cpp, verify_arrow_installation
             from .cache import get_arrow_cache_path
         except ImportError:
             sys.path.insert(0, str(Path(__file__).parent))
-            from prepare_arrow import git_clone_or_update, build_arrow_cpp, verify_arrow_installation, get_latest_arrow_release
+            from prepare_arrow import git_clone_or_update, build_arrow_cpp, verify_arrow_installation
             from cache import get_arrow_cache_path
-        
-        # If no specific revision is provided, get the latest stable release
-        if arrow_rev is None:
-            arrow_rev = get_latest_arrow_release()
-            print(f"Using latest stable Arrow release: {arrow_rev}")
         
         # Determine the repository path
         vendor = get_arrow_cache_path(arrow_git, arrow_rev)
@@ -200,14 +195,7 @@ def git_clone(url, dest, rev=None):
             if rev:
                 subprocess.check_call(["git", "-C", str(dest), "checkout", rev])
             else:
-                # Import get_latest_arrow_release function
-                try:
-                    from .prepare_arrow import get_latest_arrow_release
-                except ImportError:
-                    sys.path.insert(0, str(Path(__file__).parent))
-                    from prepare_arrow import get_latest_arrow_release
-                latest_rev = get_latest_arrow_release()
-                subprocess.check_call(["git", "-C", str(dest), "checkout", latest_rev]) 
+                subprocess.check_call(["git", "-C", str(dest), "checkout", "main"]) 
         except Exception:
             pass
         return dest
@@ -426,23 +414,38 @@ def find_arrow_artifacts(arrow_install: Path):
     if arrow_lib.exists():
         lib_dirs.append(str(arrow_lib))
         
-        # Find Arrow libraries
-        # Look for both static and shared libraries
-        lib_patterns = ["libarrow*.so", "libarrow*.a", "arrow*.lib", "arrow*.dll"]
-        for pattern in lib_patterns:
-            for lib_file in arrow_lib.glob(pattern):
-                if not lib_file.is_file():
-                    continue
-                fname = lib_file.name
-                # For MSVC, use the full .lib filename
-                if fname.endswith('.lib'):
-                    if fname not in libraries:
-                        libraries.append(fname)
-                # For GCC/Clang, use -l<name> (without lib prefix and extension)
-                elif fname.startswith('lib') and (fname.endswith('.so') or fname.endswith('.a')):
-                    lib_name = fname[3:].split('.', 1)[0]
-                    if lib_name not in libraries:
-                        libraries.append(lib_name)
+        # Find Arrow libraries - prioritize static libraries for easier deployment
+        static_libs = []
+        shared_libs = []
+        
+        # Collect static libraries first (.a files on Unix, .lib files on Windows)
+        for lib_file in arrow_lib.glob("libarrow*.a"):
+            if lib_file.is_file():
+                lib_name = lib_file.name[3:].split('.', 1)[0]  # Remove 'lib' prefix and extension
+                static_libs.append(lib_name)
+        
+        # For Windows, look for .lib files (which can be static or import libraries)
+        for lib_file in arrow_lib.glob("arrow*.lib"):
+            if lib_file.is_file():
+                lib_name = lib_file.name.split('.', 1)[0]
+                static_libs.append(lib_name)
+        
+        # Collect shared libraries as fallback (.so files)
+        for lib_file in arrow_lib.glob("libarrow*.so"):
+            if lib_file.is_file():
+                lib_name = lib_file.name[3:].split('.', 1)[0]  # Remove 'lib' prefix and extension
+                shared_libs.append(lib_name)
+        
+        # Use static libraries if available, otherwise fall back to shared
+        if static_libs:
+            libraries.extend(static_libs)
+            print(f"[ARROW] Using static libraries: {static_libs}")
+        elif shared_libs:
+            libraries.extend(shared_libs)
+            print(f"[ARROW] Using shared libraries: {shared_libs}")
+        else:
+            print(f"[ARROW] Warning: No Arrow libraries found in {arrow_lib}")
+        
         # Remove duplicates while preserving order
         seen = set()
         libraries = [x for x in libraries if not (x in seen or seen.add(x))]
@@ -788,13 +791,6 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
         std_flag = f"/std:{config.build.std}" if config else "/std:c++17"
         cmd.append(std_flag)
         
-        # Add Windows-specific preprocessor definitions to avoid conflicts with Arrow
-        # These resolve common Windows header conflicts that cause compilation errors
-        cmd.append("/DDISABLE_PCAP_PARSE")  # Disable PCap parsing
-        cmd.append("/DNOMINMAX")            # Prevent Windows min/max macros from conflicting with std::min/std::max
-        cmd.append("/DWIN32_LEAN_AND_MEAN") # Reduce Windows header bloat
-        cmd.append("/D_CRT_SECURE_NO_WARNINGS")  # Disable MSVC security warnings
-        
         # Add custom compiler flags from config, converting GCC/Clang flags to MSVC equivalents
         if config:
             msvc_flags = []
@@ -844,24 +840,6 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
                         msvc_flags.append("/wd4251")  # Disable template export warnings
                         msvc_flags.append("/wd4275")  # Disable base class export warnings
                         break
-            
-            # Add Arrow-specific warning suppressions if Arrow is used
-            if arrow_needed and not has_warning_suppression:
-                print("[INFO] Arrow detected, adding Arrow-specific warning suppressions for MSVC")
-                msvc_flags.append("/wd4996")  # Disable deprecation warnings
-                msvc_flags.append("/wd4244")  # Disable conversion warnings  
-                msvc_flags.append("/wd4267")  # Disable size conversion warnings
-                msvc_flags.append("/wd4101")  # Disable unreferenced variable warnings
-                msvc_flags.append("/wd4189")  # Disable unused variable warnings
-                msvc_flags.append("/wd4251")  # Disable template export warnings (DLL interface)
-                msvc_flags.append("/wd4275")  # Disable base class export warnings
-                msvc_flags.append("/wd4003")  # Disable not enough arguments for macro warnings
-                msvc_flags.append("/wd2589")  # Disable illegal token warnings
-                msvc_flags.append("/wd2059")  # Disable syntax error warnings for macros
-                msvc_flags.append("/wd2143")  # Disable missing tokens warnings
-                msvc_flags.append("/wd3615")  # Disable constexpr function warnings
-                msvc_flags.append("/wd2334")  # Disable unexpected tokens warnings
-                msvc_flags.append("/wd2238")  # Disable unexpected token warnings
             
             cmd.extend(msvc_flags)
         
@@ -1035,6 +1013,9 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
             for lib_dir_path in config.build.lib_dirs:
                 abs_lib = node_dir / lib_dir_path if not Path(lib_dir_path).is_absolute() else Path(lib_dir_path)
                 cmd += ["-L", str(abs_lib)]
+                # Add rpath for custom library directories too
+                if os.name != "nt":  # Linux/macOS
+                    cmd += ["-Wl,-rpath," + str(abs_lib)]
         
         # add common flags
         if os.name == "nt":
@@ -1054,6 +1035,13 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
         # Add Arrow libraries
         for arrow_lib in arrow_libraries:
             cmd += ["-l", arrow_lib]
+        
+        # Add system dependencies for Arrow static linking
+        if arrow_libraries and os.name != "nt":
+            # Arrow needs these system libraries when statically linked
+            arrow_system_deps = ["dl", "rt"]  # Dynamic loading and real-time extensions
+            for sys_dep in arrow_system_deps:
+                cmd += ["-l", sys_dep]
         
         # Add custom libraries from config
         if config:
@@ -1210,6 +1198,50 @@ def ensure_clang_installed(install: bool = False):
     except Exception as e:
         print("error while installing clang:", e)
         return False
+
+
+def copy_shared_libraries_to_executable_dir(executable_path: Path, lib_dirs: List[str]):
+    """Copy shared libraries from library directories to the same directory as the executable.
+    
+    This is used as a fallback when static linking is not possible or desired.
+    Only copies libraries that are actually needed by the executable.
+    """
+    if not executable_path.exists():
+        print(f"Warning: Executable not found: {executable_path}")
+        return
+    
+    exe_dir = executable_path.parent
+    copied_libs = []
+    
+    for lib_dir in lib_dirs:
+        lib_path = Path(lib_dir)
+        if not lib_path.exists():
+            continue
+            
+        # Find shared libraries (.so on Linux, .dylib on macOS, .dll on Windows)
+        if os.name == "nt":
+            patterns = ["*.dll"]
+        elif sys.platform == "darwin":
+            patterns = ["*.dylib"]
+        else:
+            patterns = ["*.so", "*.so.*"]
+            
+        for pattern in patterns:
+            for lib_file in lib_path.glob(pattern):
+                if lib_file.is_file():
+                    dest_file = exe_dir / lib_file.name
+                    if not dest_file.exists():
+                        try:
+                            shutil.copy2(lib_file, dest_file)
+                            copied_libs.append(lib_file.name)
+                            print(f"[COPY] Copied shared library: {lib_file.name}")
+                        except Exception as e:
+                            print(f"Warning: Could not copy {lib_file.name}: {e}")
+    
+    if copied_libs:
+        print(f"[COPY] Copied {len(copied_libs)} shared libraries to {exe_dir}")
+    
+    return copied_libs
 
 
 def main():
