@@ -106,14 +106,13 @@ class NodeConfig:
     version: str = "0.1.0"
 
 
-@dataclass  
+@dataclass
 class ArrowConfig:
     """Arrow configuration section"""
     git: Optional[str] = None
     rev: Optional[str] = None
     enabled: bool = True
-
-
+    linkage: str = "static"  # "static" or "shared"
 @dataclass
 class BuildConfig:
     """Build configuration section"""
@@ -284,7 +283,8 @@ def load_config(config_path: Optional[Union[str, Path]] = None) -> DoracxxConfig
         arrow = ArrowConfig(
             git=arrow_data.get("git"),
             rev=arrow_data.get("rev"),
-            enabled=arrow_data.get("enabled", True)
+            enabled=arrow_data.get("enabled", True),
+            linkage=arrow_data.get("linkage", "static")
         )
     
     # Parse dependencies section
@@ -328,6 +328,7 @@ std = "c++17"
 # enabled = true
 # git = "https://github.com/apache/arrow.git"
 # rev = "apache-arrow-15.0.0"
+# linkage = "static"  # "static" (default) or "shared"
 '''
     
     with open(path, "w", encoding="utf-8") as f:

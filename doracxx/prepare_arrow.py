@@ -78,8 +78,15 @@ def detect_cmake_generator():
         return "Unix Makefiles"
 
 
-def build_arrow_cpp(repo: Path, profile: str, install_dir: Path):
-    """Build Arrow C++ library with minimal configuration optimized for doracxx"""
+def build_arrow_cpp(repo: Path, profile: str, install_dir: Path, linkage: str = "static"):
+    """Build Arrow C++ library with minimal configuration optimized for doracxx
+    
+    Args:
+        repo: Arrow repository path
+        profile: Build profile (debug/release)
+        install_dir: Installation directory
+        linkage: Linkage mode - "static" (default) or "shared"
+    """
     cpp_dir = repo / "cpp"
     if not cpp_dir.exists():
         raise RuntimeError(f"Arrow C++ directory not found: {cpp_dir}")
@@ -93,7 +100,11 @@ def build_arrow_cpp(repo: Path, profile: str, install_dir: Path):
     # Detect CMake generator
     generator = detect_cmake_generator()
     
-    print(f"Building Arrow C++ library ({build_type})...")
+    print(f"Building Arrow C++ library ({build_type}, {linkage} linkage)...")
+    
+    # Configure linkage settings
+    shared_enabled = "ON" if linkage == "shared" else "OFF"
+    static_enabled = "ON" if linkage == "static" else "OFF"
     
     # Configure CMake with minimal Arrow features for faster builds
     cmake_args = [
@@ -102,8 +113,8 @@ def build_arrow_cpp(repo: Path, profile: str, install_dir: Path):
         f"-DCMAKE_INSTALL_PREFIX={install_dir}",
         
         # Core Arrow features - enable minimal set
-        "-DARROW_BUILD_SHARED=OFF",  # Disable shared libs for static linking
-        "-DARROW_BUILD_STATIC=ON",   # Enable static libs for easy deployment
+        f"-DARROW_BUILD_SHARED={shared_enabled}",  # Configurable shared libs
+        f"-DARROW_BUILD_STATIC={static_enabled}",  # Configurable static libs
         "-DARROW_COMPUTE=ON",        # Core compute functionality
         "-DARROW_CSV=ON",           # CSV support
         "-DARROW_FILESYSTEM=ON",    # Filesystem operations
@@ -210,6 +221,8 @@ def main():
     p.add_argument("--arrow-git", default="https://github.com/apache/arrow.git")
     p.add_argument("--arrow-rev", default=None, help="Git revision/tag/branch to checkout")
     p.add_argument("--profile", choices=("debug", "release"), default="debug")
+    p.add_argument("--linkage", choices=("static", "shared"), default="static",
+                   help="Arrow linkage mode: static (default) or shared")
     p.add_argument("--force-rebuild", action="store_true",
                    help="Force rebuild even if Arrow is already installed")
     p.add_argument("--use-local", action="store_true",
@@ -225,7 +238,7 @@ def main():
         print("Prepare Arrow in (local mode):", vendor)
     else:
         # New mode: use global cache with version-specific directories
-        vendor = get_arrow_cache_path(args.arrow_git, args.arrow_rev)
+        vendor = get_arrow_cache_path(args.arrow_git, args.arrow_rev, args.linkage)
         install_dir = vendor / "install"
         print("Prepare Arrow in (global cache):", vendor)
         
@@ -262,10 +275,10 @@ def main():
     
     # Build Arrow C++ library
     try:
-        success = build_arrow_cpp(repo, args.profile, install_dir)
+        success = build_arrow_cpp(repo, args.profile, install_dir, args.linkage)
         if success:
             verify_arrow_installation(install_dir)
-            print("\nArrow preparation completed successfully!")
+            print(f"\nArrow preparation completed successfully! (linkage: {args.linkage})")
             print(f"Installation directory: {install_dir}")
             print(f"Include directory: {install_dir / 'include'}")
             print(f"Library directory: {install_dir / 'lib'}")

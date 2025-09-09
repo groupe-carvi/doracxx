@@ -43,6 +43,8 @@ enabled = true
 git = "https://github.com/apache/arrow.git"
 # Use a specific version tag for reproducible builds
 rev = "apache-arrow-15.0.0"
+# Linkage mode: "static" (default) or "shared"
+linkage = "static"
 
 # Dependencies can also include Arrow via git dependency
 [dependencies]

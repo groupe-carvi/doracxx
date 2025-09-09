@@ -48,16 +48,16 @@ def find_dora_target_dir(dora_git: str | None = None, dora_rev: str | None = Non
     return str(project_root / "target")
 
 
-def find_arrow_install_dir(arrow_git: str | None = None, arrow_rev: str | None = None):
+def find_arrow_install_dir(arrow_git: str | None = None, arrow_rev: str | None = None, linkage: str = "static"):
     """Find Arrow installation directory, checking cache first, then local."""
-    # Check global cache first (version-specific)
-    cache_install = get_arrow_cache_path(arrow_git, arrow_rev) / "install"
+    # Check global cache first (version-specific with linkage)
+    cache_install = get_arrow_cache_path(arrow_git, arrow_rev, linkage) / "install"
     if cache_install.exists():
         return str(cache_install)
     
     # Fallback: try the default latest cache if specific version not found
     if arrow_git or arrow_rev:
-        default_cache_install = get_arrow_cache_path() / "install"
+        default_cache_install = get_arrow_cache_path(linkage=linkage) / "install"
         if default_cache_install.exists():
             return str(default_cache_install)
     
@@ -123,12 +123,19 @@ def ensure_dora_prepared(dora_git: str | None = None, dora_rev: str | None = Non
     return str(dora_target_path)
 
 
-def ensure_arrow_prepared(arrow_git: str | None = None, arrow_rev: str | None = None, profile: str = "debug"):
-    """Ensure Arrow is prepared and built. If not found, automatically prepare it."""
+def ensure_arrow_prepared(arrow_git: str | None = None, arrow_rev: str | None = None, profile: str = "debug", linkage: str = "static"):
+    """Ensure Arrow is prepared and built. If not found, automatically prepare it.
+    
+    Args:
+        arrow_git: Git URL for Arrow repository
+        arrow_rev: Git revision/branch/tag to checkout
+        profile: Build profile (debug/release)
+        linkage: Linkage mode - "static" (default) or "shared"
+    """
     import sys
     
     # Check if Arrow installation directory exists with required files
-    arrow_install_path = Path(find_arrow_install_dir(arrow_git, arrow_rev))
+    arrow_install_path = Path(find_arrow_install_dir(arrow_git, arrow_rev, linkage))
     
     # Check for Arrow artifacts that indicate a successful build
     arrow_indicators = [
@@ -145,7 +152,7 @@ def ensure_arrow_prepared(arrow_git: str | None = None, arrow_rev: str | None = 
         has_arrow = has_arrow and has_libs
     
     if not has_arrow:
-        print("[INFO] Arrow not found or incomplete. Preparing Arrow automatically...")
+        print(f"[INFO] Arrow not found or incomplete. Preparing Arrow automatically (linkage: {linkage})...")
         
         # Import prepare_arrow functionality
         try:
@@ -157,7 +164,7 @@ def ensure_arrow_prepared(arrow_git: str | None = None, arrow_rev: str | None = 
             from cache import get_arrow_cache_path
         
         # Determine the repository path
-        vendor = get_arrow_cache_path(arrow_git, arrow_rev)
+        vendor = get_arrow_cache_path(arrow_git, arrow_rev, linkage)
         install_dir = vendor / "install"
         print(f"[CACHE] Preparing Arrow in global cache: {vendor}")
         
@@ -166,9 +173,9 @@ def ensure_arrow_prepared(arrow_git: str | None = None, arrow_rev: str | None = 
         repo = git_clone_or_update(arrow_git_url, vendor, arrow_rev)
         
         # Build Arrow C++ library
-        print("[BUILD] Building Arrow C++ library...")
+        print(f"[BUILD] Building Arrow C++ library (linkage: {linkage})...")
         try:
-            success = build_arrow_cpp(repo, profile, install_dir)
+            success = build_arrow_cpp(repo, profile, install_dir, linkage)
             if success:
                 verify_arrow_installation(install_dir)
                 print("[OK] Arrow preparation completed")
@@ -180,7 +187,7 @@ def ensure_arrow_prepared(arrow_git: str | None = None, arrow_rev: str | None = 
             raise
         
         # Re-check the installation directory
-        new_install = find_arrow_install_dir(arrow_git, arrow_rev)
+        new_install = find_arrow_install_dir(arrow_git, arrow_rev, linkage)
         return new_install
     
     return str(arrow_install_path)
@@ -394,15 +401,20 @@ def find_cxxbridge_artifacts(dora_target: Path, profile: str):
 
 
 def find_arrow_artifacts(arrow_install: Path):
-    """Return (include_dirs, lib_dirs, libraries) for Arrow.
+    """Return (include_dirs, lib_dirs, libraries, library_info) for Arrow.
 
     include_dirs: list of directories to pass as -I (/I for MSVC)
     lib_dirs: list of directories to pass as -L (/LIBPATH for MSVC)
     libraries: list of library names to link against
+    library_info: dict with linkage info and shared library files
     """
     include_dirs = []
     lib_dirs = []
     libraries = []
+    library_info = {
+        'linkage': None,  # 'static' or 'shared'
+        'shared_files': []  # list of shared library file paths for copying
+    }
 
     # Arrow include directory
     arrow_include = arrow_install / "include"
@@ -417,6 +429,7 @@ def find_arrow_artifacts(arrow_install: Path):
         # Find Arrow libraries - prioritize static libraries for easier deployment
         static_libs = []
         shared_libs = []
+        shared_files = []
         
         # Collect static libraries first (.a files on Unix, .lib files on Windows)
         for lib_file in arrow_lib.glob("libarrow*.a"):
@@ -430,18 +443,30 @@ def find_arrow_artifacts(arrow_install: Path):
                 lib_name = lib_file.name.split('.', 1)[0]
                 static_libs.append(lib_name)
         
-        # Collect shared libraries as fallback (.so files)
-        for lib_file in arrow_lib.glob("libarrow*.so"):
-            if lib_file.is_file():
-                lib_name = lib_file.name[3:].split('.', 1)[0]  # Remove 'lib' prefix and extension
-                shared_libs.append(lib_name)
+        # Collect shared libraries as fallback (.so files on Unix, .dll on Windows, .dylib on macOS)
+        for extension in ["*.so", "*.so.*", "*.dll", "*.dylib"]:
+            for lib_file in arrow_lib.glob(f"libarrow{extension}"):
+                if lib_file.is_file():
+                    lib_name = lib_file.name[3:].split('.', 1)[0]  # Remove 'lib' prefix and extension
+                    shared_libs.append(lib_name)
+                    shared_files.append(str(lib_file))
+            
+            # Also check without 'lib' prefix (Windows style)
+            for lib_file in arrow_lib.glob(f"arrow{extension}"):
+                if lib_file.is_file():
+                    lib_name = lib_file.name.split('.', 1)[0]
+                    shared_libs.append(lib_name)
+                    shared_files.append(str(lib_file))
         
         # Use static libraries if available, otherwise fall back to shared
         if static_libs:
             libraries.extend(static_libs)
+            library_info['linkage'] = 'static'
             print(f"[ARROW] Using static libraries: {static_libs}")
         elif shared_libs:
             libraries.extend(shared_libs)
+            library_info['linkage'] = 'shared'
+            library_info['shared_files'] = shared_files
             print(f"[ARROW] Using shared libraries: {shared_libs}")
         else:
             print(f"[ARROW] Warning: No Arrow libraries found in {arrow_lib}")
@@ -450,7 +475,32 @@ def find_arrow_artifacts(arrow_install: Path):
         seen = set()
         libraries = [x for x in libraries if not (x in seen or seen.add(x))]
 
-    return include_dirs, lib_dirs, libraries
+    return include_dirs, lib_dirs, libraries, library_info
+
+
+def copy_shared_libraries(shared_files: list, executable_path: Path):
+    """Copy shared libraries to the same directory as the executable."""
+    if not shared_files:
+        return
+    
+    executable_dir = executable_path.parent
+    copied_files = []
+    
+    for shared_file in shared_files:
+        shared_path = Path(shared_file)
+        if shared_path.exists():
+            dest_path = executable_dir / shared_path.name
+            try:
+                shutil.copy2(shared_path, dest_path)
+                copied_files.append(dest_path.name)
+                print(f"[SHARED] Copied {shared_path.name} to {executable_dir}")
+            except Exception as e:
+                print(f"[ERROR] Failed to copy {shared_path}: {e}")
+        else:
+            print(f"[WARN] Shared library not found: {shared_path}")
+    
+    if copied_files:
+        print(f"[SHARED] Copied {len(copied_files)} shared libraries: {copied_files}")
 
 
 def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, dora_target: str, extras: list, config: DoracxxConfig | None = None, dora_git: str | None = None, dora_rev: str | None = None):
@@ -602,9 +652,11 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
     arrow_needed = False
     
     # Check if Arrow is configured in arrow config
+    arrow_linkage = "static"  # Default linkage mode
     if config and config.arrow and config.arrow.enabled:
         arrow_git = config.arrow.git
         arrow_rev = config.arrow.rev
+        arrow_linkage = config.arrow.linkage
         arrow_needed = True
     
     # Check if Arrow is in dependencies
@@ -618,13 +670,16 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
     arrow_include_dirs = []
     arrow_lib_dirs = []
     arrow_libraries = []
+    arrow_library_info = {}
     if arrow_needed:
         try:
             print("[INFO] Checking Arrow preparation...")
-            arrow_install = ensure_arrow_prepared(arrow_git, arrow_rev, profile)
-            arrow_include_dirs, arrow_lib_dirs, arrow_libraries = find_arrow_artifacts(Path(arrow_install))
+            arrow_install = ensure_arrow_prepared(arrow_git, arrow_rev, profile, arrow_linkage)
+            arrow_include_dirs, arrow_lib_dirs, arrow_libraries, arrow_library_info = find_arrow_artifacts(Path(arrow_install))
             print(f"[OK] Arrow ready: {arrow_install}")
             print(f"Arrow include dirs: {arrow_include_dirs}")
+            print(f"Arrow lib dirs: {arrow_lib_dirs}")
+            print(f"Arrow libraries: {arrow_libraries}")
             print(f"Arrow lib dirs: {arrow_lib_dirs}")
             print(f"Arrow libraries: {arrow_libraries}")
         except Exception as e:
@@ -937,6 +992,10 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
         # Use configured timeout for build
         timeout = config.build.build_timeout if config else 300
         run(cmd, cwd=node_dir, timeout=timeout, config=config)
+        
+        # Copy shared libraries if using shared linkage
+        if arrow_library_info.get('linkage') == 'shared' and arrow_library_info.get('shared_files'):
+            copy_shared_libraries(arrow_library_info['shared_files'], final_out_path)
     else:
         # assume gcc/clang compatible
         cmd = [cc]
@@ -1058,6 +1117,10 @@ def compile_node(node_dir: Path, build_dir: Path, out_name: str, profile: str, d
         # Use configured timeout for build
         timeout = config.build.build_timeout if config else 300
         run(cmd, cwd=node_dir, timeout=timeout, config=config)
+    
+    # Copy shared libraries if using shared linkage
+    if arrow_library_info.get('linkage') == 'shared' and arrow_library_info.get('shared_files'):
+        copy_shared_libraries(arrow_library_info['shared_files'], final_out_path)
     
     # Check if executable was created successfully
     if final_out_path.exists():
@@ -1286,7 +1349,7 @@ def main():
         node_dir = Path(args.node_dir).resolve()
 
     build_dir = node_dir / "build"
-    build_dir.mkdir(exist_ok=True)
+    build_dir.mkdir(parents=True, exist_ok=True)
 
     # Load configuration if available and not disabled
     config = None

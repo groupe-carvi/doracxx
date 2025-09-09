@@ -109,12 +109,12 @@ def cache_clean():
         print("Cache directory does not exist.")
 
 
-def get_arrow_cache_path(url: str | None = None, rev: str | None = None):
-    """Get the path for cached Arrow installation, versioned by URL and revision.
+def get_arrow_cache_path(url: str | None = None, rev: str | None = None, linkage: str | None = None):
+    """Get the path for cached Arrow installation, versioned by URL, revision and linkage mode.
     
     Creates a versioned cache directory:
-    - If rev is specified: arrow-{rev} 
-    - If no rev specified: determines the latest version from git and uses arrow-{latest_version}
+    - If rev is specified: arrow-{rev}-{linkage} 
+    - If no rev specified: determines the latest version from git and uses arrow-{latest_version}-{linkage}
     """
     cache_dir = get_doracxx_cache_dir()
     
@@ -128,20 +128,23 @@ def get_arrow_cache_path(url: str | None = None, rev: str | None = None):
         repo_name = "arrow"
         url = "https://github.com/apache/arrow.git"  # Default URL for tag lookup
     
+    # Default linkage to static if not specified
+    linkage = linkage or "static"
+    
     if rev:
-        # Include revision in the path for version-specific caching
+        # Include revision and linkage in the path for version-specific caching
         # Sanitize revision name for filesystem compatibility
         safe_rev = sanitize_for_filesystem(rev)
-        return cache_dir / f"{repo_name}-{safe_rev}"
+        return cache_dir / f"{repo_name}-{safe_rev}-{linkage}"
     else:
         # No specific revision: determine the latest version from git
         latest_tag = get_latest_git_tag(url)
         if latest_tag:
             safe_tag = sanitize_for_filesystem(latest_tag)
-            return cache_dir / f"{repo_name}-{safe_tag}"
+            return cache_dir / f"{repo_name}-{safe_tag}-{linkage}"
         else:
             # Fallback if can't determine latest version
-            return cache_dir / f"{repo_name}-main"
+            return cache_dir / f"{repo_name}-main-{linkage}"
 
 
 def sanitize_for_filesystem(name: str) -> str:
